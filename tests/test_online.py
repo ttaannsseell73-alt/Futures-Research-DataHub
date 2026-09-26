@@ -22,16 +22,26 @@ class MissingObject(Exception):
 class FakeS3:
     def __init__(self):
         self.objects = {}
+        self.buckets = set()
+
+    def head_bucket(self, Bucket):
+        if Bucket not in self.buckets:
+            raise MissingObject()
+        return {}
+
+    def create_bucket(self, Bucket):
+        self.buckets.add(Bucket)
+        return {}
 
     def head_object(self, Bucket, Key):
-        del Bucket
-        if Key not in self.objects:
+        if Bucket not in self.buckets or Key not in self.objects:
             raise MissingObject()
         item = self.objects[Key]
         return {"Metadata": dict(item["metadata"]), "ContentLength": len(item["data"])}
 
     def put_object(self, Bucket, Key, Body, Metadata=None, ContentType=None):
-        del Bucket
+        if Bucket not in self.buckets:
+            raise MissingObject()
         data = Body.read() if hasattr(Body, "read") else bytes(Body)
         self.objects[Key] = {
             "data": data,
@@ -41,14 +51,15 @@ class FakeS3:
         return {}
 
     def get_object(self, Bucket, Key):
-        del Bucket
-        if Key not in self.objects:
+        if Bucket not in self.buckets or Key not in self.objects:
             raise MissingObject()
         item = self.objects[Key]
         return {"Body": io.BytesIO(item["data"]), "Metadata": dict(item["metadata"])}
 
     def list_objects_v2(self, Bucket, Prefix, ContinuationToken=None):
-        del Bucket, ContinuationToken
+        del ContinuationToken
+        if Bucket not in self.buckets:
+            raise MissingObject()
         keys = sorted(key for key in self.objects if key.startswith(Prefix))
         return {
             "Contents": [{"Key": key} for key in keys],
@@ -164,6 +175,46 @@ def test_online_api_auth_query_and_deduplicated_jobs(tmp_path):
     assert first.json()["status"] == "QUEUED"
     result = client.get(f"/tests/{first.json()['job_id']}/results", headers=headers)
     assert result.status_code == 409
+
+
+def test_empty_remote_bootstraps_bucket_and_lists_no_manifests(tmp_path):
+    fake = FakeS3()
+    remote = S3Remote("bucket", "canonical", client=fake)
+    view = OnlineStore(Store(tmp_path / "cache"), remote)
+    assert view.manifest_names() == []
+    assert "bucket" in fake.buckets
+
+
+def test_public_read_keeps_post_protected(tmp_path, monkeypatch):
+    source = _release(tmp_path / "source")
+    fake = FakeS3()
+    remote = S3Remote("bucket", "canonical", client=fake)
+    publish_release(source, remote, "release_v1")
+    monkeypatch.setenv("DATAHUB_PUBLIC_READ", "true")
+
+    app = create_app(
+        root=tmp_path / "cache",
+        remote=remote,
+        token="secret",
+        job_db=tmp_path / "jobs.sqlite",
+    )
+    client = TestClient(app)
+    assert client.get("/manifests").status_code == 200
+
+    request = {
+        "strategy": "FIXTURE",
+        "parameters": {},
+        "manifest": "release_v1",
+        "timeframe": "1m",
+        "start": START,
+        "end": START + 120_000,
+    }
+    assert client.post("/tests", json=request).status_code == 401
+    assert client.post(
+        "/tests",
+        json=request,
+        headers={"Authorization": "Bearer secret"},
+    ).status_code == 200
 
 
 def test_research_worker_persists_result_and_failure(tmp_path):
