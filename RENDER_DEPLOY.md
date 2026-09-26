@@ -1,39 +1,60 @@
-# Render deployment
+# Render deployment — FREE ONLY
 
-This Blueprint deploys the Online DataHub in Frankfurt as two co-located services:
+This repository is intentionally configured so the Render Blueprint cannot create paid Render resources.
 
-- `futures-datahub-api`: public HTTPS read API; write/test endpoints remain bearer-token protected.
-- `futures-datahub-minio`: S3-compatible canonical object store backed by a persistent disk.
+## What Render creates
 
-The MinIO image is built from the pinned upstream MinIO source release
-`RELEASE.2025-10-15T17-29-55Z` instead of relying on the withdrawn Docker Hub
-`minio/minio` image.
+Exactly one service:
+
+- `futures-datahub-api`
+- type: Web Service
+- plan: **Free**
+- region: Frankfurt
+- Docker runtime
+- health check: `/health`
+
+The Blueprint does **not** create:
+
+- MinIO
+- persistent disks
+- Postgres
+- Key Value / Redis
+- workers
+- cron jobs
+- any `starter` or other paid Render plan
+
+## Important storage rule
+
+Render Free Web Services have an ephemeral filesystem. `DATAHUB_DATA_ROOT=/tmp/datahub` is therefore
+cache-only and must never be treated as durable canonical storage.
+
+The API can boot and pass health checks without external object storage. Until durable remote storage
+is configured, `/manifests` will normally be empty after a fresh instance starts.
+
+For persistent research data, attach a separate S3-compatible object store that has a genuinely free
+tier. Configure it only through Render environment variables; do not add a Render persistent disk.
+
+Supported variables:
+
+```text
+DATAHUB_S3_BUCKET
+DATAHUB_S3_PREFIX
+DATAHUB_S3_ENDPOINT_URL
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+AWS_REGION
+```
+
+No storage credentials are committed to Git.
 
 ## Security
 
-Render generates:
+Render generates `DATAHUB_API_TOKEN`. GET/HEAD requests are public because
+`DATAHUB_PUBLIC_READ=true`; POST and other write requests remain bearer-token protected.
 
-- `MINIO_ROOT_USER`
-- `MINIO_ROOT_PASSWORD`
-- `DATAHUB_API_TOKEN`
+## Cost policy
 
-No secret values are committed to Git. GET/HEAD requests are public when
-`DATAHUB_PUBLIC_READ=true`; POST/other write operations require the bearer token.
+**Canonical policy: no paid Render resources.**
 
-## Storage
-
-The initial MinIO disk is 10 GB. It is intentionally a bootstrap size and can be enlarged without
-changing DataHub fingerprints. Do not treat 10 GB as the final full-universe capacity.
-
-## Deploy
-
-Create a Render Blueprint from this repository. Render reads `render.yaml`, builds both services,
-creates the persistent disk, generates credentials, and wires the MinIO endpoint/credentials into
-the DataHub API automatically.
-
-After deploy:
-
-1. `GET https://<api-host>/health` must return `status=PASS`.
-2. `GET https://<api-host>/manifests` must return HTTP 200.
-3. The MinIO health endpoint must be green in Render.
-4. Populate/publish the first DataHub release before strategy research depends on the service.
+Any future change that introduces `plan: starter`, a Render persistent `disk:`, or the old
+`futures-datahub-minio` service violates the deployment policy and is guarded by an automated test.
