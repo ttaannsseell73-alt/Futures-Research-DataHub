@@ -210,11 +210,14 @@ def test_public_read_keeps_post_protected(tmp_path, monkeypatch):
         "end": START + 120_000,
     }
     assert client.post("/tests", json=request).status_code == 401
-    assert client.post(
-        "/tests",
-        json=request,
-        headers={"Authorization": "Bearer secret"},
-    ).status_code == 200
+    assert (
+        client.post(
+            "/tests",
+            json=request,
+            headers={"Authorization": "Bearer secret"},
+        ).status_code
+        == 200
+    )
 
 
 def test_research_worker_persists_result_and_failure(tmp_path):
