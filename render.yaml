@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+previews:
+  generation: off
+
+services:
+  - type: web
+    name: futures-datahub-minio
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./Dockerfile.minio
+    dockerContext: .
+    dockerCommand: minio server /data --address 0.0.0.0:$PORT --console-address 0.0.0.0:9001
+    healthCheckPath: /minio/health/live
+    autoDeployTrigger: commit
+    disk:
+      name: datahub-objects
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: MINIO_ROOT_USER
+        generateValue: true
+      - key: MINIO_ROOT_PASSWORD
+        generateValue: true
+      - key: MINIO_BROWSER
+        value: "off"
+
+  - type: web
+    name: futures-datahub-api
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./Dockerfile.online
+    dockerContext: .
+    dockerCommand: datahub-api
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: DATAHUB_DATA_ROOT
+        value: /cache/datahub
+      - key: DATAHUB_PUBLIC_READ
+        value: "true"
+      - key: DATAHUB_API_TOKEN
+        generateValue: true
+      - key: DATAHUB_S3_BUCKET
+        value: futures-research-datahub
+      - key: DATAHUB_S3_PREFIX
+        value: binance-usdm
+      - key: DATAHUB_S3_ENDPOINT_URL
+        fromService:
+          type: web
+          name: futures-datahub-minio
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: AWS_ACCESS_KEY_ID
+        fromService:
+          type: web
+          name: futures-datahub-minio
+          envVarKey: MINIO_ROOT_USER
+      - key: AWS_SECRET_ACCESS_KEY
+        fromService:
+          type: web
+          name: futures-datahub-minio
+          envVarKey: MINIO_ROOT_PASSWORD
+      - key: AWS_REGION
+        value: us-east-1

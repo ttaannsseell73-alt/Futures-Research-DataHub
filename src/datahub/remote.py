@@ -54,13 +54,26 @@ class S3Remote:
         bucket = os.getenv("DATAHUB_S3_BUCKET")
         if not bucket:
             raise ValueError("Set DATAHUB_S3_BUCKET")
+        endpoint = os.getenv("DATAHUB_S3_ENDPOINT_URL") or None
+        if endpoint and "://" not in endpoint:
+            endpoint = f"http://{endpoint}"
         return cls(
             bucket,
             prefix=os.getenv("DATAHUB_S3_PREFIX", ""),
             client=client,
-            endpoint_url=os.getenv("DATAHUB_S3_ENDPOINT_URL") or None,
+            endpoint_url=endpoint,
             region=os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or None,
         )
+
+    def ensure_bucket(self):
+        try:
+            self.client.head_bucket(Bucket=self.bucket)
+            return False
+        except Exception as exc:
+            if not _missing(exc):
+                raise
+        self.client.create_bucket(Bucket=self.bucket)
+        return True
 
     def key(self, relative: str) -> str:
         relative = safe_relative(relative)
@@ -146,6 +159,7 @@ class S3Remote:
         return destination
 
     def list_keys(self, relative_prefix: str):
+        self.ensure_bucket()
         prefix = self.key(relative_prefix)
         token = None
         while True:
@@ -203,6 +217,7 @@ def materialize_partition(store, remote: S3Remote, part):
 def publish_release(store, remote: S3Remote, name: str):
     """Publish one verified immutable release. Existing identical objects are reused."""
     safe_name(name)
+    remote.ensure_bucket()
     document = store.verify(name)
     uploaded = 0
     reused = 0
