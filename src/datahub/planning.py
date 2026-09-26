@@ -332,7 +332,7 @@ def _load_state(store, name, plan):
 
 
 def _summary(plan, state):
-    counts = {"PENDING": 0, "COMPLETE": 0, "FAILED": 0, "RUNNING": 0}
+    counts = {"PENDING": 0, "COMPLETE": 0, "FAILED": 0}
     for job in plan["jobs"]:
         status = state["jobs"].get(job["job_id"], {}).get("status", "PENDING")
         counts[status] = counts.get(status, 0) + 1
