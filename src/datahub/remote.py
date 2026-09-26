@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -24,8 +23,7 @@ def _missing(exc: Exception) -> bool:
     response = getattr(exc, "response", None) or {}
     error = response.get("Error", {}) if isinstance(response, dict) else {}
     code = str(error.get("Code", ""))
-    status = response.get("ResponseMetadata", {}).get("HTTPStatusCode") if isinstance(response, dict) else None
-    return code in {"404", "NoSuchKey", "NotFound"} or status == 404
+    status = (\n        response.get("ResponseMetadata", {}).get("HTTPStatusCode")\n        if isinstance(response, dict)\n        else None\n    )\n    return code in {"404", "NoSuchKey", "NotFound"} or status == 404
 
 
 class S3Remote:
