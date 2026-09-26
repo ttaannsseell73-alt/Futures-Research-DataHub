@@ -247,3 +247,36 @@ def test_research_worker_persists_result_and_failure(tmp_path):
     assert status["job_id"] == failed["job_id"]
     assert status["status"] == "FAILED"
     assert "fixture failure" in status["error"]
+
+
+def test_public_read_without_token_disables_writes(tmp_path, monkeypatch):
+    source = _release(tmp_path / "source")
+    fake = FakeS3()
+    remote = S3Remote("bucket", "canonical", client=fake)
+    publish_release(source, remote, "release_v1")
+    monkeypatch.setenv("DATAHUB_PUBLIC_READ", "true")
+
+    app = create_app(
+        root=tmp_path / "cache",
+        remote=remote,
+        token="",
+        job_db=tmp_path / "jobs.sqlite",
+    )
+    client = TestClient(app)
+
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json()["write_enabled"] is False
+    assert client.get("/manifests").status_code == 200
+
+    request = {
+        "strategy": "FIXTURE",
+        "parameters": {},
+        "manifest": "release_v1",
+        "timeframe": "1m",
+        "start": START,
+        "end": START + 120_000,
+    }
+    response = client.post("/tests", json=request)
+    assert response.status_code == 503
+    assert "disabled" in response.json()["detail"].lower()
