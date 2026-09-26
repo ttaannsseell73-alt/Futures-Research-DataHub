@@ -409,11 +409,7 @@ def run_plan(store, name, max_jobs=None, adapters=None):
             atomic_json(state_path, state)
             try:
                 adapter = adapters[job["source"]]
-                fallback = (
-                    adapters[job["fallback_source"]]
-                    if job.get("fallback_source")
-                    else None
-                )
+                fallback = adapters[job["fallback_source"]] if job.get("fallback_source") else None
                 receipts = sync(
                     store,
                     adapter,
