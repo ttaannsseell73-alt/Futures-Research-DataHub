@@ -91,7 +91,7 @@ pytest -q
 python -m build
 ```
 
-CI runs these checks on Ubuntu and Windows, Python 3.11 and 3.12, plus the installed CLI.
+CI runs these checks on Ubuntu and Windows, Python 3.11 and 3.12, plus the installed CLI. The acceptance gate requires the complete matrix to pass before release.
 Tests are deterministic, use synthetic small fixtures, and do not depend on Binance uptime.
 Integration tests exercise archive parsing through validation, Parquet/ZSTD, checkpoint resume,
 manifest publication and offline DuckDB reads. A live smoke is separate from deterministic CI.
