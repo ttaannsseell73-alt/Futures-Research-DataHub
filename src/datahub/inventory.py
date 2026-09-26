@@ -241,9 +241,7 @@ def scan_vision_inventory(
                 last_day = next(day for day in reversed(days) if seg_start <= day < seg_end)
                 for day in {first_day, last_day}:
                     if day not in probe_cache:
-                        table, provenance = vision.fetch(
-                            "ohlcv", symbol, "1m", day, day + DAY
-                        )
+                        table, provenance = vision.fetch("ohlcv", symbol, "1m", day, day + DAY)
                         probe_cache[day] = (*_table_bounds(table), provenance["archive_sha256"])
                 exact_start = probe_cache[first_day][0]
                 exact_end = probe_cache[last_day][1]
@@ -255,7 +253,9 @@ def scan_vision_inventory(
                 "object_count": len(days),
                 "archive_ranges": archive_ranges,
                 "bridged_missing_ranges": bridged,
-                "active_segments": [segment for segment in active_segments if segment[0] < segment[1]],
+                "active_segments": [
+                    segment for segment in active_segments if segment[0] < segment[1]
+                ],
                 "boundary_probe": probe_boundaries,
             }
         )
