@@ -11,7 +11,6 @@ from .core import INTERVALS, safe_symbol
 from .ingest import Rest, Vision
 from .sync import sync
 
-
 CSV_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
 
