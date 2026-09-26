@@ -82,11 +82,12 @@ class S3Index:
             values.extend(page["prefixes"])
         return sorted(set(values))
 
-    def objects(self, prefix, start_after=None):
-        values = []
+    def iter_objects(self, prefix, start_after=None):
         for page in self.walk(prefix, start_after=start_after):
-            values.extend(page["objects"])
-        return values
+            yield from page["objects"]
+
+    def objects(self, prefix, start_after=None):
+        return list(self.iter_objects(prefix, start_after=start_after))
 
 
 def discover_symbols(index):
@@ -120,7 +121,7 @@ def daily_archive_days(index, symbol, start, end):
     start_after = _key(symbol, previous)
     expected_prefix = f"{symbol}-1m-"
     dates = []
-    for obj in index.objects(prefix, start_after=start_after):
+    for obj in index.iter_objects(prefix, start_after=start_after):
         key = obj["key"]
         name = key.rsplit("/", 1)[-1]
         if not name.endswith(".zip") or not name.startswith(expected_prefix):
@@ -242,9 +243,15 @@ def scan_vision_inventory(
                 for day in {first_day, last_day}:
                     if day not in probe_cache:
                         table, provenance = vision.fetch("ohlcv", symbol, "1m", day, day + DAY)
-                        probe_cache[day] = (*_table_bounds(table), provenance["archive_sha256"])
-                exact_start = probe_cache[first_day][0]
-                exact_end = probe_cache[last_day][1]
+                        first_timestamp, end_timestamp = _table_bounds(table)
+                        probe_cache[day] = {
+                            "day": day,
+                            "first_timestamp": first_timestamp,
+                            "end_timestamp": end_timestamp,
+                            "archive_sha256": provenance["archive_sha256"],
+                        }
+                exact_start = probe_cache[first_day]["first_timestamp"]
+                exact_end = probe_cache[last_day]["end_timestamp"]
             active_segments.append([max(start, exact_start), min(end, exact_end)])
 
         records.append(
@@ -257,6 +264,7 @@ def scan_vision_inventory(
                     segment for segment in active_segments if segment[0] < segment[1]
                 ],
                 "boundary_probe": probe_boundaries,
+                "boundary_proofs": [probe_cache[day] for day in sorted(probe_cache)],
             }
         )
 

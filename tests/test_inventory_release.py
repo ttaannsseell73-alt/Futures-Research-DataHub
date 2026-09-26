@@ -10,6 +10,7 @@ from datahub.ingest import HTTP, Vision
 from datahub.inventory import (
     S3Index,
     archive_snapshot,
+    daily_archive_days,
     load_inventory,
     scan_vision_inventory,
 )
@@ -242,3 +243,80 @@ def test_unicode_symbol_is_safe_and_vision_url_is_encoded():
     assert table.num_rows == 6
     encoded = urllib.parse.quote(symbol, safe="")
     assert any(encoded in url for url in seen)
+
+
+def test_daily_archive_scan_stops_at_requested_end_without_extra_pages():
+    calls = []
+    prefix = "data/futures/um/daily/klines/BTCUSDT/1m/"
+    first_page = [
+        f"{prefix}BTCUSDT-1m-2024-01-01.zip",
+        f"{prefix}BTCUSDT-1m-2024-01-03.zip",
+    ]
+
+    def handler(request):
+        calls.append(request)
+        if request.url.params.get("continuation-token"):
+            raise AssertionError("scanner should stop before requesting later S3 pages")
+        return httpx.Response(
+            200,
+            content=_xml(objects=first_page, truncated=True, token="later").encode(),
+        )
+
+    index = S3Index(
+        HTTP(httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda _: None)
+    )
+    days = daily_archive_days(index, "BTCUSDT", START, START + 2 * DAY)
+    assert days == [START]
+    assert len(calls) == 1
+
+
+def test_boundary_probe_checksum_is_bound_into_inventory(tmp_path):
+    key = "data/futures/um/daily/klines/BTCUSDT/1m/BTCUSDT-1m-2024-01-01.zip"
+
+    def handler(request):
+        return httpx.Response(200, content=_xml(objects=[key]).encode())
+
+    class ProbeVision:
+        def fetch(self, kind, symbol, timeframe, start, end):
+            table = normalize(
+                [
+                    [START + 60_000, "10", "12", "9", "11", "2"],
+                    [START + 120_000, "10", "12", "9", "11", "2"],
+                ],
+                kind,
+            )
+            return table, {"archive_sha256": "a" * 64}
+
+    store = Store(tmp_path)
+    index = S3Index(
+        HTTP(httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda _: None)
+    )
+    doc = scan_vision_inventory(
+        store,
+        "proof",
+        START,
+        START + DAY,
+        symbols=["BTCUSDT"],
+        index=index,
+        vision=ProbeVision(),
+    )
+    row = doc["symbols"][0]
+    assert row["active_segments"] == [[START + 60_000, START + 180_000]]
+    assert row["boundary_proofs"] == [
+        {
+            "day": START,
+            "first_timestamp": START + 60_000,
+            "end_timestamp": START + 180_000,
+            "archive_sha256": "a" * 64,
+        }
+    ]
+
+
+def test_symbol_rejects_cross_platform_path_metacharacters():
+    for symbol in ("BTC/USDT", "BTC\\USDT", "BTC:USDT", "BTC*USDT", "BTC?USDT", "BTCUSDT."):
+        try:
+            safe_symbol(symbol)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"unsafe symbol accepted: {symbol}")

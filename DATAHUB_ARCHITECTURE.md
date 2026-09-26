@@ -140,8 +140,11 @@ uses the historical daily USD-M kline prefix, not current `exchangeInfo`. For ea
 inventory scans 1m daily archive presence, stores exact observed ranges and records small missing
 archive ranges when they are bridged into an activity segment.
 
-Boundary probing downloads only first/last observed 1m files for each activity segment through the
-normal checksum-verified Vision adapter, producing exact first/last observed candle bounds.
+Inventory object enumeration is streamed page-by-page and terminates as soon as the requested end
+range is reached, avoiding accidental scans through all newer archives. Boundary probing downloads
+only first/last observed 1m files for each activity segment through the normal checksum-verified
+Vision adapter. The exact observed bounds and boundary archive SHA256 proofs are stored in the
+immutable inventory fingerprint.
 
 This protects research from **current-list survivorship bias**, including delisted archive symbols,
 but does not convert archive presence into an exchange-certified listing record. The inventory
