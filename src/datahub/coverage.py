@@ -1,6 +1,6 @@
 """Coverage accounting over validated, content-addressed receipts."""
 
-from .core import INTERVALS, KINDS, safe_name
+from .core import INTERVALS, KINDS, safe_symbol
 
 
 def catalog_index(store):
@@ -40,7 +40,7 @@ def _gaps(start, end, intervals):
 
 def coverage(store, kind, symbol, timeframe, start, end, index=None):
     """Report verified local coverage for one dataset/symbol/timeframe range."""
-    safe_name(symbol)
+    safe_symbol(symbol)
     if kind not in KINDS or timeframe not in INTERVALS:
         raise ValueError("Unsupported dataset/timeframe")
     if start >= end:
