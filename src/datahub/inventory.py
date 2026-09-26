@@ -2,7 +2,7 @@
 
 import re
 import xml.etree.ElementTree as ET
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pyarrow as pa
 
