@@ -78,9 +78,7 @@ def coverage_attestation(store, plan):
         "plan_fingerprint": plan["fingerprint"],
         "series": rows,
         "fixed_grid_complete": all(
-            row["status"] == "COMPLETE"
-            for row in rows
-            if row["dataset"] != "funding"
+            row["status"] == "COMPLETE" for row in rows if row["dataset"] != "funding"
         ),
         "funding_semantics": "event_stream_not_schedule-certified",
     }
@@ -173,9 +171,7 @@ def doctor(store, deep=False, strict=False):
             try:
                 store.receipt(item["receipt_id"])
             except Exception as exc:
-                problems.append(
-                    {"type": "receipt", "id": item["receipt_id"], "error": str(exc)}
-                )
+                problems.append({"type": "receipt", "id": item["receipt_id"], "error": str(exc)})
 
     status = "FAIL" if problems or (strict and warnings) else "PASS"
     return {
