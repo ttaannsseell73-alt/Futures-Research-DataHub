@@ -43,9 +43,7 @@ def test_fetch_csv_exports_verified_cached_partition(tmp_path, monkeypatch):
 
     assert result["status"] == "READY"
     assert result["rows"] == 2
-    assert calls == [
-        ("vision", "rest", "ohlcv", "BTCUSDT", "1m", START, START + 120_000)
-    ]
+    assert calls == [("vision", "rest", "ohlcv", "BTCUSDT", "1m", START, START + 120_000)]
 
     with output.open(newline="", encoding="utf-8") as stream:
         exported = list(csv.reader(stream))
