@@ -15,6 +15,8 @@ from .planning import (
     run_plan,
 )
 from .release import doctor, publish_plan
+from .remote import S3Remote, publish_release as publish_remote_release
+from .remote import pull_release as pull_remote_release
 from .storage import Store
 from .sync import sync
 from .universe import capture_metadata, import_lifecycle, snapshot
@@ -125,6 +127,12 @@ def main(argv=None):
     rel.add_argument("--plan", required=True)
     rel.add_argument("--universe")
 
+    remote_publish = sub.add_parser("remote-publish")
+    remote_publish.add_argument("name")
+
+    remote_pull = sub.add_parser("remote-pull")
+    remote_pull.add_argument("name")
+
     doc = sub.add_parser("doctor")
     doc.add_argument("--deep", action="store_true")
     doc.add_argument("--strict", action="store_true")
@@ -230,6 +238,10 @@ def main(argv=None):
             result = plan_status(store, args.name)
         elif args.command == "release":
             result = publish_plan(store, args.name, args.plan, args.universe)
+        elif args.command == "remote-publish":
+            result = publish_remote_release(store, S3Remote.from_env(), args.name)
+        elif args.command == "remote-pull":
+            result = pull_remote_release(store, S3Remote.from_env(), args.name)
         else:
             result = doctor(store, deep=args.deep, strict=args.strict)
             if result["status"] != "PASS":
