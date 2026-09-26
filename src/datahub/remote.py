@@ -159,6 +159,7 @@ class S3Remote:
         return destination
 
     def list_keys(self, relative_prefix: str):
+        self.ensure_bucket()
         prefix = self.key(relative_prefix)
         token = None
         while True:
