@@ -4,16 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "futures-research-datahub"
-version = "1.0.0"
-description = "Versioned, validated Binance USD-M research data; no strategies"
+version = "1.1.0"
+description = "Versioned, validated Binance USD-M research data with immutable online publication"
 requires-python = ">=3.11"
-dependencies = ["pyarrow>=18,<24", "polars>=1.20,<2", "duckdb>=1.2,<2", "httpx>=0.28,<1", "filelock>=3.17,<4"]
+dependencies = ["pyarrow>=18,<24", "polars>=1.20,<2", "duckdb>=1.2,<2", "httpx>=0.28,<1", "filelock>=3.17,<4", "tzdata>=2025.2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.11,<1", "build>=1.2,<2"]
+online = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "boto3>=1.35,<2"]
 
 [project.scripts]
 datahub = "datahub.cli:main"
+datahub-api = "datahub.online:serve"
+datahub-worker = "datahub.research:worker_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
