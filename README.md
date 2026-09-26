@@ -167,6 +167,37 @@ artifacts as release-health failures.
 See [OPERATIONS.md](OPERATIONS.md) for the production sequence and recovery rules, and
 [DATAHUB_ARCHITECTURE.md](DATAHUB_ARCHITECTURE.md) for invariants and evidence semantics.
 
+## Online DataHub V1.1
+
+V1.1 can publish a verified release to S3-compatible object storage and serve it through a remote
+API. This is the canonical path for research while the user's PC is off.
+
+```sh
+pip install -e ".[online]"
+
+# After the normal local release gate:
+export DATAHUB_S3_BUCKET=research-data
+export DATAHUB_S3_PREFIX=binance-usdm
+datahub --root D:/Futures-Research-Data remote-publish BINANCE_USDM_2025_V1
+
+# On the always-on API/worker host:
+export DATAHUB_DATA_ROOT=/cache/datahub
+export DATAHUB_API_TOKEN=replace-with-a-long-random-secret
+datahub-api
+```
+
+The online layer is **remote-canonical, local-cache**: immutable Parquet objects remain in object
+storage; API/workers hydrate only the manifest partitions needed for a query and verify their SHA256
+before use. `/query-plan` returns exact partition keys for high-throughput workers, while `/bars`
+supports bounded JSON or Arrow IPC inspection.
+
+The persistent `/tests` queue is intentionally strategy-free. RSI, STR100 and other research
+executors are external plugins configured on workers via
+`DATAHUB_RESEARCH_EXECUTOR=module:function`. Identical requests receive the same fingerprint/job ID
+and therefore can reuse a stored result instead of recomputing.
+
+See [ONLINE.md](ONLINE.md) for storage, API, worker and deployment details.
+
 ## Development and CI
 
 ```sh
