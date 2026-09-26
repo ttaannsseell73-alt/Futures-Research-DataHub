@@ -1,0 +1,2 @@
+# Copy to datahub.local.toml. Use an absolute path outside the repository.
+data_root = "D:/Futures-Research-Data"
