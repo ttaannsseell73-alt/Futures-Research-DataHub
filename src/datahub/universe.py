@@ -1,6 +1,6 @@
 """Point-in-time lifecycle evidence. Current exchangeInfo is never historical completeness."""
 
-from .core import fingerprint, safe_name, utcnow
+from .core import fingerprint, safe_name, safe_symbol, utcnow
 
 
 def capture_metadata(store, payload):
@@ -28,7 +28,7 @@ def import_lifecycle(store, evidence):
         raise ValueError("Invalid lifecycle coverage")
     seen = set()
     for row in evidence["records"]:
-        safe_name(row["symbol"])
+        safe_symbol(row["symbol"])
         identity = (row["symbol"], row["listed_at"])
         if identity in seen:
             raise ValueError("Duplicate lifecycle record")
