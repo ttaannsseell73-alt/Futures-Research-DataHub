@@ -43,7 +43,9 @@ class S3Remote:
             try:
                 import boto3
             except ImportError as exc:  # pragma: no cover - exercised by minimal installs
-                raise RuntimeError("Install futures-research-datahub[online] for S3 support") from exc
+                raise RuntimeError(
+                    "Install futures-research-datahub[online] for S3 support"
+                ) from exc
             client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region)
         self.client = client
 
@@ -77,14 +79,19 @@ class S3Remote:
         body = response["Body"]
         return body.read() if hasattr(body, "read") else bytes(body)
 
-    def put_bytes_immutable(self, relative: str, data: bytes, content_type="application/octet-stream"):
+    def put_bytes_immutable(
+        self, relative: str, data: bytes, content_type="application/octet-stream"
+    ):
         digest = hashlib.sha256(data).hexdigest()
         head = self.head(relative)
         if head is not None:
             remote_digest = (head.get("Metadata") or {}).get("sha256")
             if remote_digest == digest:
                 return {"uploaded": False, "sha256": digest, "key": self.key(relative)}
-            if remote_digest is None and hashlib.sha256(self.get_bytes(relative)).hexdigest() == digest:
+            if (
+                remote_digest is None
+                and hashlib.sha256(self.get_bytes(relative)).hexdigest() == digest
+            ):
                 return {"uploaded": False, "sha256": digest, "key": self.key(relative)}
             raise ValueError(f"Immutable remote object differs: {relative}")
         self.client.put_object(
@@ -200,9 +207,7 @@ def publish_release(store, remote: S3Remote, name: str):
     uploaded = 0
     reused = 0
     for part in document["partitions"]:
-        result = remote.put_file_immutable(
-            part["path"], store.root / part["path"], part["sha256"]
-        )
+        result = remote.put_file_immutable(part["path"], store.root / part["path"], part["sha256"])
         uploaded += int(result["uploaded"])
         reused += int(not result["uploaded"])
         receipt_path = store.root / f"receipts/{part['receipt_id']}.json"
