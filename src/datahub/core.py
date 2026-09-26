@@ -50,9 +50,10 @@ def safe_symbol(value):
     """Allow exchange symbols including Unicode while blocking path/control injection."""
     if not isinstance(value, str) or not value or len(value) > 100:
         raise ValueError("Unsafe symbol")
-    if value in {".", ".."} or any(ch in value for ch in ("/", "\\", "\x00")):
+    forbidden = '/\\<>:"|?*\x00'
+    if value in {".", ".."} or any(ch in value for ch in forbidden):
         raise ValueError("Unsafe symbol")
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+    if value.endswith((".", " ")) or any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
         raise ValueError("Unsafe symbol")
     return value
 
