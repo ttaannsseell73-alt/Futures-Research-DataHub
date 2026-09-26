@@ -6,6 +6,7 @@ from pathlib import Path
 from .core import INTERVALS, KINDS, data_root, millis
 from .coverage import coverage
 from .ingest import Rest, Vision
+from .export import fetch_ohlcv_csv
 from .inventory import archive_snapshot, scan_vision_inventory
 from .planning import (
     coverage_matrix,
@@ -15,9 +16,6 @@ from .planning import (
     run_plan,
 )
 from .release import doctor, publish_plan
-from .remote import S3Remote
-from .remote import publish_release as publish_remote_release
-from .remote import pull_release as pull_remote_release
 from .storage import Store
 from .sync import sync
 from .universe import capture_metadata, import_lifecycle, snapshot
@@ -46,6 +44,12 @@ def main(argv=None):
     s.add_argument("--symbol", required=True)
     s.add_argument("--timeframe", choices=INTERVALS, default="1m")
     _add_range(s)
+
+    fc = sub.add_parser("fetch-csv")
+    fc.add_argument("--symbol", required=True)
+    fc.add_argument("--timeframe", choices=INTERVALS, default="1m")
+    _add_range(fc)
+    fc.add_argument("--output", required=True)
 
     sub.add_parser("catalog")
 
@@ -128,12 +132,6 @@ def main(argv=None):
     rel.add_argument("--plan", required=True)
     rel.add_argument("--universe")
 
-    remote_publish = sub.add_parser("remote-publish")
-    remote_publish.add_argument("name")
-
-    remote_pull = sub.add_parser("remote-pull")
-    remote_pull.add_argument("name")
-
     doc = sub.add_parser("doctor")
     doc.add_argument("--deep", action="store_true")
     doc.add_argument("--strict", action="store_true")
@@ -157,6 +155,15 @@ def main(argv=None):
                     millis(args.end),
                 )
             }
+        elif args.command == "fetch-csv":
+            result = fetch_ohlcv_csv(
+                store,
+                args.symbol,
+                args.timeframe,
+                millis(args.start),
+                millis(args.end),
+                args.output,
+            )
         elif args.command == "catalog":
             result = store.catalog()
         elif args.command == "manifest":
@@ -239,10 +246,6 @@ def main(argv=None):
             result = plan_status(store, args.name)
         elif args.command == "release":
             result = publish_plan(store, args.name, args.plan, args.universe)
-        elif args.command == "remote-publish":
-            result = publish_remote_release(store, S3Remote.from_env(), args.name)
-        elif args.command == "remote-pull":
-            result = pull_remote_release(store, S3Remote.from_env(), args.name)
         else:
             result = doctor(store, deep=args.deep, strict=args.strict)
             if result["status"] != "PASS":
