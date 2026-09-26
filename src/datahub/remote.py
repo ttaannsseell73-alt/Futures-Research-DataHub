@@ -23,7 +23,12 @@ def _missing(exc: Exception) -> bool:
     response = getattr(exc, "response", None) or {}
     error = response.get("Error", {}) if isinstance(response, dict) else {}
     code = str(error.get("Code", ""))
-    status = (\n        response.get("ResponseMetadata", {}).get("HTTPStatusCode")\n        if isinstance(response, dict)\n        else None\n    )\n    return code in {"404", "NoSuchKey", "NotFound"} or status == 404
+    status = (
+        response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if isinstance(response, dict)
+        else None
+    )
+    return code in {"404", "NoSuchKey", "NotFound"} or status == 404
 
 
 class S3Remote:
