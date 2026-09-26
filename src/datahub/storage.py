@@ -10,7 +10,7 @@ import duckdb
 import pyarrow.parquet as pq
 from filelock import FileLock
 
-from .core import atomic_json, fingerprint, safe_name, sha256, utcnow
+from .core import atomic_json, fingerprint, safe_name, safe_symbol, sha256, utcnow
 from .schemas import CANDLE, FUNDING
 from .validation import validate
 
@@ -35,7 +35,7 @@ class Store:
             atomic_json(path, document)
 
     def put(self, table, kind, symbol, timeframe, start, end, provenance):
-        safe_name(symbol)
+        safe_symbol(symbol)
         safe_name(kind)
         safe_name(timeframe)
         report = validate(table, kind, timeframe, start, end)
@@ -94,7 +94,7 @@ class Store:
             raise ValueError("Quarantine cannot enter dataset")
         return receipt
 
-    def manifest(self, name, receipt_ids, universe=None):
+    def manifest(self, name, receipt_ids, universe=None, lineage=None):
         safe_name(name)
         if not receipt_ids:
             raise ValueError("Cannot publish empty dataset")
@@ -118,6 +118,8 @@ class Store:
             "partitions": partitions,
             "universe": snapshot,
         }
+        if lineage is not None:
+            body["lineage"] = lineage
         document = dict(body, fingerprint=fingerprint(body))
         with self.lock():
             self.immutable(f"manifests/{name}.json", document)
