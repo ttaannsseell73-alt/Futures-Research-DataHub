@@ -8,9 +8,9 @@ Exactly one service:
 
 - `futures-datahub-api`
 - type: Web Service
+- runtime: native Python
 - plan: **Free**
 - region: Frankfurt
-- Docker runtime
 - health check: `/health`
 
 The Blueprint does **not** create:
@@ -49,7 +49,8 @@ No storage credentials are committed to Git.
 
 ## Security
 
-Render generates `DATAHUB_API_TOKEN`. GET/HEAD requests are public because
+Render generates `DATAHUB_API_TOKEN` when using the Blueprint. For direct API creation, set a
+random `DATAHUB_API_TOKEN` in the Render environment. GET/HEAD requests are public because
 `DATAHUB_PUBLIC_READ=true`; POST and other write requests remain bearer-token protected.
 
 ## Cost policy
