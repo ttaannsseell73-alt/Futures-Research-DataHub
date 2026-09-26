@@ -4,7 +4,6 @@ from datahub.export import fetch_ohlcv_csv
 from datahub.schemas import normalize
 from datahub.storage import Store
 
-
 START = 1_704_067_200_000
 
 
