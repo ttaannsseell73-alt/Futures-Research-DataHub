@@ -75,9 +75,7 @@ class OnlineStore:
         return document, parts
 
     def query_plan(self, name, kind, symbol, timeframe, start, end):
-        document, parts = self.partitions(
-            name, kind, symbol, timeframe, start, end, hydrate=False
-        )
+        document, parts = self.partitions(name, kind, symbol, timeframe, start, end, hydrate=False)
         return {
             "manifest": name,
             "manifest_fingerprint": document["fingerprint"],
@@ -198,7 +196,9 @@ def create_app(root=None, remote=None, token=None, job_db=None):
     if remote is None and os.getenv("DATAHUB_S3_BUCKET"):
         remote = S3Remote.from_env()
     view = OnlineStore(store, remote)
-    jobs = ResearchJobs(job_db or os.getenv("DATAHUB_JOB_DB", str(store.root / "research/jobs.sqlite")))
+    jobs = ResearchJobs(
+        job_db or os.getenv("DATAHUB_JOB_DB", str(store.root / "research/jobs.sqlite"))
+    )
     auth_token = token if token is not None else os.getenv("DATAHUB_API_TOKEN")
 
     app = FastAPI(title="Futures Research DataHub Online", version=__version__)
