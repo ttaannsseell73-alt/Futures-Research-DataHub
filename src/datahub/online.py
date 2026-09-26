@@ -13,7 +13,6 @@ import pyarrow.ipc as ipc
 
 from . import __version__
 from .core import INTERVALS, KINDS, fingerprint, millis, safe_name, safe_symbol
-from .coverage import coverage
 from .remote import S3Remote, materialize_manifest_control, materialize_partition
 from .research import ResearchJobs
 from .schemas import CANDLE, FUNDING
@@ -100,6 +99,62 @@ class OnlineStore:
             ],
         }
 
+    def coverage_summary(self, name, kind, symbol, timeframe, start, end):
+        _, parts = self.partitions(name, kind, symbol, timeframe, start, end, hydrate=False)
+        clipped = [
+            (max(start, part["start"]), min(end, part["end"]))
+            for part in parts
+            if part["end"] > start and part["start"] < end
+        ]
+        merged = []
+        for left, right in sorted(clipped):
+            if not merged or left > merged[-1][1]:
+                merged.append([left, right])
+            else:
+                merged[-1][1] = max(merged[-1][1], right)
+        if kind == "funding":
+            return {
+                "manifest": name,
+                "dataset": kind,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "start": start,
+                "end": end,
+                "status": "EVENT_STREAM",
+                "complete": None,
+                "covered_intervals": merged,
+                "expected_rows": None,
+                "covered_rows": sum(part["validation"]["actual_rows"] for part in parts),
+            }
+        step = INTERVALS[timeframe]
+        if start % step or end % step:
+            raise ValueError("Coverage bounds must align with timeframe")
+        cursor = start
+        gaps = []
+        for left, right in merged:
+            if cursor < left:
+                gaps.append([cursor, left])
+            cursor = max(cursor, right)
+        if cursor < end:
+            gaps.append([cursor, end])
+        expected = (end - start) // step
+        covered = sum((right - left) // step for left, right in merged)
+        return {
+            "manifest": name,
+            "dataset": kind,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "start": start,
+            "end": end,
+            "status": "COMPLETE" if not gaps else "GAPPED",
+            "complete": not gaps,
+            "coverage_ratio": covered / expected if expected else 1.0,
+            "expected_rows": expected,
+            "covered_rows": covered,
+            "covered_intervals": merged,
+            "gaps": gaps,
+        }
+
     def scan_range(self, name, kind, symbol, timeframe, start, end, limit=None):
         _, parts = self.partitions(name, kind, symbol, timeframe, start, end, hydrate=True)
         paths = [str(self.store.root / part["path"]) for part in parts]
@@ -136,10 +191,10 @@ def create_app(root=None, remote=None, token=None, job_db=None):
     except ImportError as exc:  # pragma: no cover - minimal install behavior
         raise RuntimeError("Install futures-research-datahub[online]") from exc
 
-    root = Path(root or os.getenv("DATAHUB_DATA_ROOT", "")).expanduser()
-    if not str(root):
+    raw_root = root or os.getenv("DATAHUB_DATA_ROOT")
+    if not raw_root:
         raise ValueError("Set DATAHUB_DATA_ROOT")
-    store = Store(root.resolve())
+    store = Store(Path(raw_root).expanduser().resolve())
     if remote is None and os.getenv("DATAHUB_S3_BUCKET"):
         remote = S3Remote.from_env()
     view = OnlineStore(store, remote)
@@ -185,6 +240,7 @@ def create_app(root=None, remote=None, token=None, job_db=None):
 
     @app.get("/coverage")
     def coverage_endpoint(
+        manifest: str,
         dataset: str,
         symbol: str,
         timeframe: str,
@@ -192,15 +248,15 @@ def create_app(root=None, remote=None, token=None, job_db=None):
         end: str,
     ):
         try:
-            return coverage(
-                store,
+            return view.coverage_summary(
+                manifest,
                 dataset,
                 symbol,
                 timeframe,
                 _parse_time(start),
                 _parse_time(end),
             )
-        except ValueError as exc:
+        except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/query-plan")
