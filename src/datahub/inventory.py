@@ -192,9 +192,32 @@ def scan_vision_inventory(
         raise ValueError("Inventory range must be nonempty")
     if max_gap_days < 0 or max_gap_days > 31:
         raise ValueError("max_gap_days must be between 0 and 31")
+    requested_symbols = sorted(set(symbols)) if symbols else None
+    request = {
+        "requested_start": start,
+        "requested_end": end,
+        "requested_symbols": requested_symbols,
+        "symbol_regex": symbol_regex,
+        "max_bridge_gap_days": max_gap_days,
+        "boundary_probe": probe_boundaries,
+    }
+    existing_path = store.root / f"inventories/{name}.json"
+    if existing_path.exists():
+        existing = load_inventory(store, name)
+        current = {
+            "requested_start": existing["requested_start"],
+            "requested_end": existing["requested_end"],
+            "requested_symbols": existing.get("requested_symbols"),
+            "symbol_regex": existing.get("symbol_regex"),
+            "max_bridge_gap_days": existing["max_bridge_gap_days"],
+            "boundary_probe": existing.get("boundary_probe", True),
+        }
+        if current != request:
+            raise ValueError("Immutable inventory name already exists with different parameters")
+        return existing
 
     index = index or S3Index()
-    discovered = list(symbols) if symbols else discover_symbols(index)
+    discovered = list(requested_symbols) if requested_symbols else discover_symbols(index)
     discovered = [safe_symbol(symbol) for symbol in discovered]
     if symbol_regex:
         pattern = re.compile(symbol_regex)
@@ -247,6 +270,9 @@ def scan_vision_inventory(
         "timeframe": "1m",
         "requested_start": start,
         "requested_end": end,
+        "requested_symbols": requested_symbols,
+        "symbol_regex": symbol_regex,
+        "boundary_probe": probe_boundaries,
         "observed_at": utcnow(),
         "listing_scan_complete": True,
         "historical_listing_complete": False,
