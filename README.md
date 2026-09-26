@@ -82,6 +82,27 @@ current exchangeInfo is never substituted for the historical universe. A fresh i
 contains no historically complete universe. Build/import audited history before all-universe
 research. Publish with `manifest ... --universe JAN_2024` to bind its fingerprint and membership.
 
+## Coverage and controlled backfill
+
+Coverage is computed only from VALID receipts whose partition SHA256 still verifies. Fixed-grid
+candle datasets report covered intervals, gaps, conflicts and a coverage ratio. Funding remains
+an event stream: the DataHub reports observed events but does not claim schedule completeness.
+
+```sh
+datahub --root D:/Futures-Research-Data coverage --dataset ohlcv --symbol BTCUSDT --timeframe 1m --start 2024-01-01T00:00:00Z --end 2024-02-01T00:00:00Z
+datahub --root D:/Futures-Research-Data coverage-matrix --lifecycle LIFECYCLE_ID --datasets ohlcv mark_price index_price funding --timeframes 1m 5m 15m 1h 4h --start 2024-01-01T00:00:00Z --end 2024-02-01T00:00:00Z
+datahub --root D:/Futures-Research-Data backfill-plan JAN_2024 --lifecycle LIFECYCLE_ID --datasets ohlcv mark_price index_price funding --timeframes 1m 5m 15m 1h 4h --start 2024-01-01T00:00:00Z --end 2024-02-01T00:00:00Z
+datahub --root D:/Futures-Research-Data backfill-run JAN_2024 --max-jobs 100
+datahub --root D:/Futures-Research-Data backfill-status JAN_2024
+```
+
+Backfill plans are immutable and require lifecycle evidence marked complete for the whole requested
+range. This keeps delisted contracts in the historical workload instead of rebuilding history from
+today's exchangeInfo. The default `auto` source policy uses Binance Vision for complete UTC-day
+candle chunks and REST for lifecycle/coverage edge fragments; funding always uses REST. Completed
+jobs are receipt-verified before they are skipped on resume. Plan-run state is mutable and guarded
+by a per-plan lock, while the plan itself is fingerprinted and immutable.
+
 ## Validation and development
 
 ```sh

@@ -1,4 +1,4 @@
-# DataHub architecture — v0.1
+# DataHub architecture — v0.2
 
 ## Boundary
 
@@ -18,7 +18,7 @@ files and never performs network access. One scan selects one dataset/symbol/tim
 
 Modules: `ingest.py` (sources), `schemas.py`, `validation.py`, `storage.py` (objects, catalog,
 versioning, offline reader), `sync.py` (incremental orchestration), `universe.py` (metadata and
-historical snapshots), `core.py` (UTC, configuration, hashes, atomic JSON), `cli.py`.
+historical snapshots), `coverage.py` (verified gap/conflict accounting), `planning.py`\n(backfill plans and resumable execution), `core.py` (UTC, configuration, hashes, atomic JSON),\n`cli.py`.
 
 ## Local layout
 
@@ -83,6 +83,25 @@ listing/delisting timestamps, per-record source and knowledge time. Membership u
 Knowledge cutoff rejects future evidence. Do not confuse retrospective membership with knowledge
 available to a point-in-time strategy. Source completeness is an audited external prerequisite;
 software cannot infer it from surviving symbols. No production historical universe is bundled.
+
+## Coverage and backfill contract
+
+Bulk coverage builds one receipt index per scan, then verifies only matching content-addressed
+partitions before accounting. Candle coverage is fixed-grid and may be COMPLETE, GAPPED or
+CONFLICT. Different objects that overlap the same series are a conflict and block new backfill
+plan creation until resolved. Funding is EVENT_STREAM and never receives a fabricated gap ratio.
+
+Backfill plans require complete lifecycle evidence across the full requested range. Jobs are
+created from historical listing intervals, so symbols that are delisted today remain in past
+workloads. Candle lifecycle boundaries are clipped inward to complete timeframe bars. Under the
+default auto policy, complete UTC days use Vision while partial boundary/gap fragments use REST.
+Funding uses one canonical `1m` namespace label and REST only; that label does not assert a
+one-minute funding cadence.
+
+The plan document is deterministic, fingerprinted and immutable. Mutable progress is stored
+separately under `plan_runs/` and protected by a per-plan file lock. Each job still delegates to
+the original sync/checkpoint path, so retries preserve per-day checkpoint semantics. A job marked
+complete is not trusted blindly on resume: its receipts and partition hashes are re-verified first.
 
 ## HTTP and operational limits
 
