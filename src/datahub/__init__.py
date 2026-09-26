@@ -1,3 +1,3 @@
-"""Offline-first market data infrastructure. No strategy or execution logic."""
+"""Strategy-free market-data infrastructure with local and online immutable releases."""
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
