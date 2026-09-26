@@ -97,7 +97,8 @@ membership only when the imported evidence explicitly says coverage is complete.
 the current exchange contract list. It scans USD-M daily 1m kline object presence, groups contiguous
 archive ranges and can bridge only short archive holes while recording those holes explicitly.
 Boundary files are checksum-verified and probed by default to obtain first/last observed candle
-times.
+times. S3 objects are streamed page-by-page and scanning stops at the requested end date; boundary
+archive SHA256 proofs are stored inside the immutable inventory fingerprint.
 
 ```sh
 datahub --root D:/Futures-Research-Data archive-universe JAN15_2024 \
