@@ -6,10 +6,11 @@ import io
 import time
 import zipfile
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 import httpx
 
-from .core import INTERVALS, safe_name
+from .core import INTERVALS, safe_symbol
 from .schemas import normalize
 
 ENDPOINTS = {
@@ -97,12 +98,22 @@ class Vision:
     def fetch(self, kind, symbol, timeframe, start, end):
         if kind == "funding":
             raise ValueError("Funding uses REST; Vision funding archive is not assumed")
-        safe_name(symbol)
+        safe_symbol(symbol)
         if timeframe not in INTERVALS or start % 86_400_000 or end - start != 86_400_000:
             raise ValueError("Vision sync requires a complete UTC day")
         date = datetime.fromtimestamp(start / 1000, UTC).strftime("%Y-%m-%d")
         name = f"{symbol}-{timeframe}-{date}.zip"
-        url = f"https://data.binance.vision/data/futures/um/daily/{ENDPOINTS[kind]}/{symbol}/{timeframe}/{name}"
+        parts = [
+            "data",
+            "futures",
+            "um",
+            "daily",
+            ENDPOINTS[kind],
+            symbol,
+            timeframe,
+            name,
+        ]
+        url = "https://data.binance.vision/" + "/".join(quote(part, safe="") for part in parts)
         checksum = self.http.get(url + ".CHECKSUM").text.split()[0].lower()
         raw = self.http.get(url).content
         actual = hashlib.sha256(raw).hexdigest()
