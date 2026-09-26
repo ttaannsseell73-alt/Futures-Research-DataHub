@@ -200,12 +200,14 @@ def create_app(root=None, remote=None, token=None, job_db=None):
         job_db or os.getenv("DATAHUB_JOB_DB", str(store.root / "research/jobs.sqlite"))
     )
     auth_token = token if token is not None else os.getenv("DATAHUB_API_TOKEN")
+    public_read = os.getenv("DATAHUB_PUBLIC_READ", "").lower() in {"1", "true", "yes"}
 
     app = FastAPI(title="Futures Research DataHub Online", version=__version__)
 
     @app.middleware("http")
     async def bearer_auth(request: Request, call_next):
-        if auth_token and request.url.path != "/health":
+        read_allowed = public_read and request.method in {"GET", "HEAD"}
+        if auth_token and request.url.path != "/health" and not read_allowed:
             if request.headers.get("authorization") != f"Bearer {auth_token}":
                 return JSONResponse({"detail": "Unauthorized"}, status_code=401)
         return await call_next(request)
@@ -217,6 +219,7 @@ def create_app(root=None, remote=None, token=None, job_db=None):
             "version": __version__,
             "remote": remote is not None,
             "research_queue": True,
+            "public_read": public_read,
         }
 
     @app.get("/manifests")
