@@ -284,9 +284,7 @@ def run_plan(store, name, max_jobs=None, adapters=None):
                     job["start"],
                     job["end"],
                 )
-                entry.update(
-                    status="COMPLETE", receipts=receipts, error=None, updated_at=utcnow()
-                )
+                entry.update(status="COMPLETE", receipts=receipts, error=None, updated_at=utcnow())
             except Exception as exc:
                 entry.update(status="FAILED", error=str(exc), updated_at=utcnow())
             state["updated_at"] = entry["updated_at"]
