@@ -11,12 +11,11 @@ previews:
 services:
   - type: web
     name: futures-datahub-api
-    runtime: docker
+    runtime: python
     plan: free
     region: frankfurt
-    dockerfilePath: ./Dockerfile.online
-    dockerContext: .
-    dockerCommand: datahub-api
+    buildCommand: python -m pip install -e ".[online]"
+    startCommand: datahub-api
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
