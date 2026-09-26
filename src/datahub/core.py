@@ -46,6 +46,17 @@ def safe_name(value):
     return value
 
 
+def safe_symbol(value):
+    """Allow exchange symbols including Unicode while blocking path/control injection."""
+    if not isinstance(value, str) or not value or len(value) > 100:
+        raise ValueError("Unsafe symbol")
+    if value in {".", ".."} or any(ch in value for ch in ("/", "\\", "\x00")):
+        raise ValueError("Unsafe symbol")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise ValueError("Unsafe symbol")
+    return value
+
+
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
