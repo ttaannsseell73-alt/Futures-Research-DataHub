@@ -206,10 +206,21 @@ def create_app(root=None, remote=None, token=None, job_db=None):
 
     @app.middleware("http")
     async def bearer_auth(request: Request, call_next):
+        if request.url.path == "/health":
+            return await call_next(request)
+
         read_allowed = public_read and request.method in {"GET", "HEAD"}
-        if auth_token and request.url.path != "/health" and not read_allowed:
-            if request.headers.get("authorization") != f"Bearer {auth_token}":
-                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        if read_allowed:
+            return await call_next(request)
+
+        if not auth_token:
+            return JSONResponse(
+                {"detail": "Write API disabled until DATAHUB_API_TOKEN is configured"},
+                status_code=503,
+            )
+
+        if request.headers.get("authorization") != f"Bearer {auth_token}":
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
         return await call_next(request)
 
     @app.get("/health")
@@ -220,6 +231,7 @@ def create_app(root=None, remote=None, token=None, job_db=None):
             "remote": remote is not None,
             "research_queue": True,
             "public_read": public_read,
+            "write_enabled": bool(auth_token),
         }
 
     @app.get("/manifests")
