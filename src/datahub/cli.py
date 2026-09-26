@@ -15,7 +15,8 @@ from .planning import (
     run_plan,
 )
 from .release import doctor, publish_plan
-from .remote import S3Remote, publish_release as publish_remote_release
+from .remote import S3Remote
+from .remote import publish_release as publish_remote_release
 from .remote import pull_release as pull_remote_release
 from .storage import Store
 from .sync import sync
