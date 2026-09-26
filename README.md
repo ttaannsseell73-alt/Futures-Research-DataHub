@@ -167,36 +167,31 @@ artifacts as release-health failures.
 See [OPERATIONS.md](OPERATIONS.md) for the production sequence and recovery rules, and
 [DATAHUB_ARCHITECTURE.md](DATAHUB_ARCHITECTURE.md) for invariants and evidence semantics.
 
-## Online DataHub V1.1
+## Hybrid research execution
 
-V1.1 can publish a verified release to S3-compatible object storage and serve it through a remote
-API. This is the canonical path for research while the user's PC is off.
+DataHub is the shared data layer for both local and cloud research. It is **not a server** and does
+not require Render, MinIO, a persistent web service, or an always-on PC.
+
+For a research runner, use `fetch-csv`:
 
 ```sh
-pip install -e ".[online]"
-
-# After the normal local release gate:
-export DATAHUB_S3_BUCKET=research-data
-export DATAHUB_S3_PREFIX=binance-usdm
-datahub --root D:/Futures-Research-Data remote-publish BINANCE_USDM_2025_V1
-
-# On the always-on API/worker host:
-export DATAHUB_DATA_ROOT=/cache/datahub
-export DATAHUB_API_TOKEN=replace-with-a-long-random-secret
-datahub-api
+datahub --root D:/Futures-Research-Data fetch-csv \
+  --symbol BTCUSDT --timeframe 5m \
+  --start 2026-01-01T00:00:00Z --end 2026-02-01T00:00:00Z \
+  --output artifacts/BTCUSDT-5m.csv
 ```
 
-The online layer is **remote-canonical, local-cache**: immutable Parquet objects remain in object
-storage; API/workers hydrate only the manifest partitions needed for a query and verify their SHA256
-before use. `/query-plan` returns exact partition keys for high-throughput workers, while `/bars`
-supports bounded JSON or Arrow IPC inspection.
+Behavior:
 
-The persistent `/tests` queue is intentionally strategy-free. RSI, STR100 and other research
-executors are external plugins configured on workers via
-`DATAHUB_RESEARCH_EXECUTOR=module:function`. Identical requests receive the same fingerprint/job ID
-and therefore can reuse a stored result instead of recomputing.
+- on a self-hosted/local runner, verified daily checkpoints on the local disk are reused;
+- on a GitHub-hosted cloud runner, the required range is fetched on demand;
+- Binance Vision is primary and REST is the explicit fallback;
+- every downstream strategy receives the same canonical CSV contract:
+  `timestamp,open,high,low,close,volume`;
+- many strategies reuse the same prepared dataset instead of downloading it once per strategy.
 
-See [ONLINE.md](ONLINE.md) for storage, API, worker and deployment details.
+The strategy engine remains outside DataHub. Current strategy consumers can run on a local
+self-hosted runner, a GitHub-hosted runner, or both for sharded workloads.
 
 ## Development and CI
 
