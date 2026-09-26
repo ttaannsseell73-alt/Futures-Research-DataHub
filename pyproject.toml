@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "futures-research-datahub"
-version = "0.2.0"
+version = "1.0.0"
 description = "Versioned, validated Binance USD-M research data; no strategies"
 requires-python = ">=3.11"
 dependencies = ["pyarrow>=18,<24", "polars>=1.20,<2", "duckdb>=1.2,<2", "httpx>=0.28,<1", "filelock>=3.17,<4"]

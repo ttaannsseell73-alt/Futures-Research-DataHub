@@ -1,4 +1,4 @@
-"""Deterministic survivorship-safe coverage planning and resumable backfill execution."""
+"""Deterministic coverage planning and resumable backfill execution."""
 
 from pathlib import Path
 
@@ -7,6 +7,7 @@ from filelock import FileLock
 from .core import INTERVALS, KINDS, atomic_json, fingerprint, safe_name, utcnow
 from .coverage import catalog_index, coverage
 from .ingest import Rest, Vision
+from .inventory import load_inventory
 from .sync import sync
 
 DAY = 86_400_000
@@ -34,6 +35,23 @@ def lifecycle_intervals(store, lifecycle, start, end):
             intervals.append({"symbol": record["symbol"], "start": left, "end": right})
     intervals.sort(key=lambda item: (item["symbol"], item["start"], item["end"]))
     return intervals
+
+
+def inventory_intervals(store, inventory, start=None, end=None):
+    document = load_inventory(store, inventory)
+    start = document["requested_start"] if start is None else start
+    end = document["requested_end"] if end is None else end
+    if not document["requested_start"] <= start < end <= document["requested_end"]:
+        raise ValueError("Requested range is outside inventory coverage")
+    intervals = []
+    for record in document["symbols"]:
+        for seg_start, seg_end in record["active_segments"]:
+            left = max(start, seg_start)
+            right = min(end, seg_end)
+            if left < right:
+                intervals.append({"symbol": record["symbol"], "start": left, "end": right})
+    intervals.sort(key=lambda item: (item["symbol"], item["start"], item["end"]))
+    return document, intervals
 
 
 def _aligned_interval(kind, timeframe, start, end):
@@ -117,6 +135,7 @@ def create_backfill_plan(
     end,
     source_policy="auto",
 ):
+    """Create an audited-lifecycle plan. Kept for exact listing/delisting evidence."""
     safe_name(name)
     if source_policy not in {"auto", "vision", "rest"}:
         raise ValueError("source_policy must be auto, vision, or rest")
@@ -125,6 +144,7 @@ def create_backfill_plan(
     index = catalog_index(store)
     jobs = []
     complete_series = 0
+    preexisting = set()
     for active in intervals:
         for kind in datasets:
             selected = ("1m",) if kind == "funding" else timeframes
@@ -140,6 +160,8 @@ def create_backfill_plan(
                         "Coverage conflict for "
                         f"{kind}/{active['symbol']}/{timeframe}; resolve first"
                     )
+                if kind != "funding":
+                    preexisting.update(report["receipt_ids"])
                 gaps = [[left, right]] if kind == "funding" else report["gaps"]
                 if not gaps:
                     complete_series += 1
@@ -168,6 +190,7 @@ def create_backfill_plan(
     body = {
         "schema_version": 1,
         "plan_id": name,
+        "evidence_type": "audited_lifecycle",
         "lifecycle_fingerprint": lifecycle,
         "requested_start": start,
         "requested_end": end,
@@ -176,12 +199,107 @@ def create_backfill_plan(
         "funding_timeframe_namespace": "1m",
         "source_policy": source_policy,
         "preexisting_complete_series": complete_series,
+        "preexisting_receipt_ids": sorted(preexisting),
         "jobs": jobs,
     }
     document = dict(body, fingerprint=fingerprint(body))
     with store.lock():
         store.immutable(f"plans/{name}.json", document)
     return document
+
+
+def create_inventory_backfill_plan(
+    store,
+    name,
+    inventory,
+    datasets,
+    timeframes,
+    start=None,
+    end=None,
+    source_policy="vision-rest",
+):
+    """Plan from archive-observed activity without consulting today's exchangeInfo."""
+    safe_name(name)
+    if source_policy not in {"vision-rest", "vision", "rest"}:
+        raise ValueError("source_policy must be vision-rest, vision, or rest")
+    datasets, timeframes = _normalized_inputs(datasets, timeframes)
+    document, intervals = inventory_intervals(store, inventory, start, end)
+    start = document["requested_start"] if start is None else start
+    end = document["requested_end"] if end is None else end
+    index = catalog_index(store)
+    jobs = []
+    preexisting = set()
+    complete_series = 0
+
+    for active in intervals:
+        for kind in datasets:
+            selected = ("1m",) if kind == "funding" else timeframes
+            for timeframe in selected:
+                left, right = _aligned_interval(kind, timeframe, active["start"], active["end"])
+                if left >= right:
+                    continue
+                report = coverage(
+                    store, kind, active["symbol"], timeframe, left, right, index=index
+                )
+                if report["conflicts"]:
+                    raise ValueError(
+                        "Coverage conflict for "
+                        f"{kind}/{active['symbol']}/{timeframe}; resolve first"
+                    )
+                if kind != "funding":
+                    preexisting.update(report["receipt_ids"])
+                gaps = [[left, right]] if kind == "funding" else report["gaps"]
+                if not gaps:
+                    complete_series += 1
+                    continue
+                for gap_start, gap_end in gaps:
+                    if kind == "funding" or source_policy == "rest":
+                        source, fallback = "rest", None
+                    elif source_policy == "vision":
+                        source, fallback = "vision", None
+                    else:
+                        source, fallback = "vision", "rest"
+                    body = {
+                        "dataset": kind,
+                        "symbol": active["symbol"],
+                        "timeframe": timeframe,
+                        "start": gap_start,
+                        "end": gap_end,
+                        "source": source,
+                    }
+                    if fallback:
+                        body["fallback_source"] = fallback
+                    jobs.append(dict(body, job_id=fingerprint(body)))
+
+    jobs.sort(
+        key=lambda job: (
+            job["symbol"],
+            job["dataset"],
+            job["timeframe"],
+            job["start"],
+            job["end"],
+        )
+    )
+    body = {
+        "schema_version": 1,
+        "plan_id": name,
+        "evidence_type": "archive_inventory",
+        "inventory_id": inventory,
+        "inventory_fingerprint": document["fingerprint"],
+        "requested_start": start,
+        "requested_end": end,
+        "datasets": list(datasets),
+        "timeframes": list(timeframes),
+        "funding_timeframe_namespace": "1m",
+        "source_policy": source_policy,
+        "preexisting_complete_series": complete_series,
+        "preexisting_receipt_ids": sorted(preexisting),
+        "jobs": jobs,
+    }
+    plan = dict(body, fingerprint=fingerprint(body))
+    with store.lock():
+        store.immutable(f"plans/{name}.json", plan)
+    return plan
 
 
 def load_plan(store, name):
@@ -239,6 +357,22 @@ def plan_status(store, name):
     return _summary(plan, state)
 
 
+def plan_receipts(store, name, require_complete=True):
+    plan = load_plan(store, name)
+    state = _load_state(store, name, plan)
+    summary = _summary(plan, state)
+    if require_complete and summary["status"] != "COMPLETE":
+        raise ValueError("Backfill plan is not complete")
+    receipts = set(plan.get("preexisting_receipt_ids", []))
+    for job in plan["jobs"]:
+        entry = state["jobs"].get(job["job_id"], {})
+        if entry.get("status") == "COMPLETE":
+            receipts.update(entry.get("receipts", []))
+    for receipt_id in receipts:
+        store.receipt(receipt_id)
+    return sorted(receipts)
+
+
 def run_plan(store, name, max_jobs=None, adapters=None):
     if max_jobs is not None and max_jobs <= 0:
         raise ValueError("max_jobs must be positive")
@@ -275,6 +409,7 @@ def run_plan(store, name, max_jobs=None, adapters=None):
             atomic_json(state_path, state)
             try:
                 adapter = adapters[job["source"]]
+                fallback = adapters[job["fallback_source"]] if job.get("fallback_source") else None
                 receipts = sync(
                     store,
                     adapter,
@@ -283,6 +418,7 @@ def run_plan(store, name, max_jobs=None, adapters=None):
                     job["timeframe"],
                     job["start"],
                     job["end"],
+                    fallback_adapter=fallback,
                 )
                 entry.update(status="COMPLETE", receipts=receipts, error=None, updated_at=utcnow())
             except Exception as exc:
