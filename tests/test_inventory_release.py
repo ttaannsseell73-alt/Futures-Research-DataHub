@@ -29,7 +29,7 @@ def _xml(prefixes=(), objects=(), truncated=False, token=None):
     contents = "".join(
         "<Contents>"
         f"<Key>{key}</Key><LastModified>2024-01-02T00:00:00.000Z</LastModified>"
-        f"<ETag>\"etag\"</ETag><Size>123</Size>"
+        f'<ETag>"etag"</ETag><Size>123</Size>'
         "</Contents>"
         for key in objects
     )
@@ -62,7 +62,9 @@ def test_s3_index_paginates_common_prefixes():
             content=_xml(prefixes=["data/futures/um/daily/klines/DEADUSDT/"]).encode(),
         )
 
-    index = S3Index(HTTP(httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda _: None))
+    index = S3Index(
+        HTTP(httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda _: None)
+    )
     values = index.common_prefixes("data/futures/um/daily/klines/")
     assert values == [
         "data/futures/um/daily/klines/BTCUSDT/",
@@ -192,10 +194,7 @@ def test_inventory_plan_fallback_release_and_doctor(tmp_path):
         name = "rest"
 
         def fetch(self, kind, symbol, timeframe, start, end):
-            rows = [
-                [ts, "10", "12", "9", "11", "2"]
-                for ts in range(start, end, 14_400_000)
-            ]
+            rows = [[ts, "10", "12", "9", "11", "2"] for ts in range(start, end, 14_400_000)]
             return normalize(rows, kind), {"source": "fixture_rest"}
 
     result = run_plan(
@@ -224,9 +223,7 @@ def test_unicode_symbol_is_safe_and_vision_url_is_encoded():
     with zipfile.ZipFile(output, "w") as archive:
         archive.writestr(
             "fixture.csv",
-            "\n".join(
-                f"{ts},10,12,9,11,2" for ts in range(START, START + DAY, 14_400_000)
-            ),
+            "\n".join(f"{ts},10,12,9,11,2" for ts in range(START, START + DAY, 14_400_000)),
         )
     raw = output.getvalue()
     checksum = hashlib.sha256(raw).hexdigest()
@@ -238,7 +235,9 @@ def test_unicode_symbol_is_safe_and_vision_url_is_encoded():
             return httpx.Response(200, text=checksum + " fixture.zip")
         return httpx.Response(200, content=raw)
 
-    vision = Vision(HTTP(httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda _: None))
+    vision = Vision(
+        HTTP(httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda _: None)
+    )
     table, _ = vision.fetch("ohlcv", symbol, "4h", START, START + DAY)
     assert table.num_rows == 6
     encoded = urllib.parse.quote(symbol, safe="")
