@@ -104,3 +104,124 @@ def sync(store, adapter, kind, symbol, timeframe, start, end, fallback_adapter=N
             receipts.append(rid)
         cursor = stop
     return receipts
+
+
+
+def sync_month(store, adapter, kind, symbol, timeframe, start, end, fallback_adapter=None):
+    """Sync exactly one complete UTC month as one verified partition."""
+    safe_symbol(symbol)
+    if kind not in KINDS or timeframe not in INTERVALS:
+        raise ValueError("Unsupported dataset/timeframe")
+    if start >= end or end > int(datetime.now(UTC).timestamp() * 1000):
+        raise ValueError("Require a nonempty historical interval")
+
+    start_dt = datetime.fromtimestamp(start / 1000, UTC)
+    end_dt = datetime.fromtimestamp(end / 1000, UTC)
+    if (
+        start_dt.day != 1
+        or start_dt.hour
+        or start_dt.minute
+        or start_dt.second
+        or start_dt.microsecond
+    ):
+        raise ValueError("Monthly sync requires a UTC month boundary")
+    if start_dt.month == 12:
+        expected_end = datetime(start_dt.year + 1, 1, 1, tzinfo=UTC)
+    else:
+        expected_end = datetime(start_dt.year, start_dt.month + 1, 1, tzinfo=UTC)
+    if end_dt != expected_end:
+        raise ValueError("Monthly sync requires exactly one complete UTC month")
+
+    job = {
+        "source": adapter.name,
+        "granularity": "month",
+        "dataset": kind,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "start": start,
+        "end": end,
+        "schema_version": 1,
+    }
+    if fallback_adapter is not None:
+        job["fallback_source"] = fallback_adapter.name
+    key = fingerprint(job)
+    checkpoint = store.root / f"checkpoints/{key}.json"
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+
+    with FileLock(str(checkpoint) + ".lock", timeout=30):
+        if checkpoint.exists():
+            state = store.json(f"checkpoints/{key}.json")
+            if state["status"] == "COMPLETE":
+                store.receipt(state["receipt_id"])
+                return [state["receipt_id"]]
+
+        atomic_json(checkpoint, dict(job, status="RUNNING", updated_at=utcnow()))
+        try:
+            table, provenance = adapter.fetch_month(kind, symbol, timeframe, start, end)
+            rid = store.put(table, kind, symbol, timeframe, start, end, provenance)
+            source_used = f"{adapter.name}_monthly"
+            primary_error = None
+        except Exception as primary_exc:
+            if fallback_adapter is None:
+                atomic_json(
+                    checkpoint,
+                    dict(job, status="FAILED", error=str(primary_exc), updated_at=utcnow()),
+                )
+                raise
+            primary_error = str(primary_exc)
+            atomic_json(
+                checkpoint,
+                dict(
+                    job,
+                    status="FALLBACK",
+                    primary_error=primary_error,
+                    updated_at=utcnow(),
+                ),
+            )
+            try:
+                daily_ids = sync(
+                    store,
+                    adapter,
+                    kind,
+                    symbol,
+                    timeframe,
+                    start,
+                    end,
+                    fallback_adapter=fallback_adapter,
+                )
+                atomic_json(
+                    checkpoint,
+                    dict(
+                        job,
+                        status="COMPLETE_DAILY_FALLBACK",
+                        receipt_ids=daily_ids,
+                        source_used="daily_sync",
+                        primary_error=primary_error,
+                        updated_at=utcnow(),
+                    ),
+                )
+                return daily_ids
+            except Exception as fallback_exc:
+                atomic_json(
+                    checkpoint,
+                    dict(
+                        job,
+                        status="FAILED",
+                        primary_error=primary_error,
+                        fallback_error=str(fallback_exc),
+                        updated_at=utcnow(),
+                    ),
+                )
+                raise
+
+        complete = dict(
+            job,
+            status="COMPLETE",
+            receipt_id=rid,
+            source_used=source_used,
+            updated_at=utcnow(),
+        )
+        if primary_error is not None:
+            complete["primary_error"] = primary_error
+        atomic_json(checkpoint, complete)
+        return [rid]
