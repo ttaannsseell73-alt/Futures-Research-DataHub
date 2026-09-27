@@ -12,7 +12,7 @@ from datahub.core import data_root, millis
 from datahub.ingest import HTTP, Rest, Vision
 from datahub.schemas import normalize
 from datahub.storage import Store
-from datahub.sync import sync
+from datahub.sync import sync, sync_month
 from datahub.universe import capture_metadata, import_lifecycle, snapshot
 from datahub.validation import validate
 
@@ -262,3 +262,45 @@ def test_cli_real_process(tmp_path):
         text=True,
     )
     assert proc.returncode == 1 and "error" in json.loads(proc.stderr)
+
+
+def test_vision_monthly_archive_and_cached_sync(tmp_path):
+    start = 1767225600000  # 2026-01-01T00:00:00Z
+    end = 1769904000000    # 2026-02-01T00:00:00Z
+    step = 900000
+    rows = [[t, "10", "12", "9", "11", "2"] for t in range(start, end, step)]
+
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as z:
+        z.writestr(
+            "BTCUSDT-15m-2026-01.csv",
+            "open_time,open,high,low,close,volume\n"
+            + "\n".join(",".join(map(str, row)) for row in rows),
+        )
+    raw = stream.getvalue()
+    checksum = hashlib.sha256(raw).hexdigest()
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if str(request.url).endswith(".CHECKSUM"):
+            return httpx.Response(200, text=checksum + "  file.zip")
+        return httpx.Response(200, content=raw)
+
+    vision = Vision(HTTP(httpx.Client(transport=httpx.MockTransport(handler))))
+    table, provenance = vision.fetch_month("ohlcv", "BTCUSDT", "15m", start, end)
+    assert table.num_rows == 2976
+    assert provenance["source"] == "binance_vision_monthly"
+    assert "/monthly/klines/BTCUSDT/15m/" in provenance["url"]
+
+    store = Store(tmp_path)
+    ids = sync_month(store, vision, "ohlcv", "BTCUSDT", "15m", start, end)
+    assert len(ids) == 1
+    calls_after_first = len(calls)
+
+    def offline(request):
+        raise AssertionError("Network forbidden during cached monthly sync")
+
+    vision.http = HTTP(httpx.Client(transport=httpx.MockTransport(offline)))
+    assert sync_month(store, vision, "ohlcv", "BTCUSDT", "15m", start, end) == ids
+    assert len(calls) == calls_after_first
