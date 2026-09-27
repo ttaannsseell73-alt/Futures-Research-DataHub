@@ -50,3 +50,54 @@ def test_fetch_csv_exports_verified_cached_partition(tmp_path, monkeypatch):
     assert exported[0] == ["timestamp", "open", "high", "low", "close", "volume"]
     assert exported[1][0] == str(START)
     assert exported[2][0] == str(START + 60_000)
+
+
+def test_fetch_csv_decomposes_multi_month_range_into_monthly_and_daily(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from datetime import UTC, datetime
+
+    root = tmp_path / "data"
+    root.mkdir()
+    objects = root / "objects"
+    objects.mkdir()
+
+    jan = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp() * 1000)
+    feb = int(datetime(2026, 2, 1, tzinfo=UTC).timestamp() * 1000)
+    mar = int(datetime(2026, 3, 1, tzinfo=UTC).timestamp() * 1000)
+    mar15 = int(datetime(2026, 3, 15, tzinfo=UTC).timestamp() * 1000)
+
+    receipts = {}
+    for rid, ts in [("jan", jan), ("feb", feb), ("mar", mar)]:
+        path = objects / f"{rid}.parquet"
+        table = normalize([[ts, "10", "12", "9", "11", "2"]], "ohlcv")
+        pq.write_table(table, path)
+        receipts[rid] = {"path": f"objects/{rid}.parquet"}
+
+    class FakeStore:
+        def __init__(self, root):
+            self.root = root
+        def receipt(self, rid):
+            return receipts[rid]
+
+    calls = []
+    def fake_month(store_arg, adapter, kind, symbol, timeframe, start, end, fallback_adapter=None):
+        calls.append(("month", start, end))
+        return ["jan" if start == jan else "feb"]
+
+    def fake_day(store_arg, adapter, kind, symbol, timeframe, start, end, fallback_adapter=None):
+        calls.append(("day", start, end))
+        return ["mar"]
+
+    monkeypatch.setattr("datahub.export.sync_month", fake_month)
+    monkeypatch.setattr("datahub.export.sync", fake_day)
+
+    output = tmp_path / "range.csv"
+    result = fetch_ohlcv_csv(FakeStore(root), "BTCUSDT", "15m", jan, mar15, output)
+
+    assert result["rows"] == 3
+    assert calls == [
+        ("month", jan, feb),
+        ("month", feb, mar),
+        ("day", mar, mar15),
+    ]
