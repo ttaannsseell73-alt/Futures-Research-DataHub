@@ -28,43 +28,60 @@ def fetch_ohlcv_csv(store, symbol: str, timeframe: str, start: int, end: int, ou
     if start >= end:
         raise ValueError("Require start < end")
 
-    start_dt = datetime.fromtimestamp(start / 1000, UTC)
-    end_dt = datetime.fromtimestamp(end / 1000, UTC)
-    if start_dt.month == 12:
-        expected_month_end = datetime(start_dt.year + 1, 1, 1, tzinfo=UTC)
-    else:
-        expected_month_end = datetime(start_dt.year, start_dt.month + 1, 1, tzinfo=UTC)
-    complete_month = (
-        start_dt.day == 1
-        and start_dt.hour == 0
-        and start_dt.minute == 0
-        and start_dt.second == 0
-        and start_dt.microsecond == 0
-        and end_dt == expected_month_end
-    )
+    def month_start_ms(value: int) -> int:
+        dt = datetime.fromtimestamp(value / 1000, UTC)
+        return int(datetime(dt.year, dt.month, 1, tzinfo=UTC).timestamp() * 1000)
 
-    if complete_month:
-        receipt_ids = sync_month(
-            store,
-            Vision(),
-            "ohlcv",
-            symbol,
-            timeframe,
-            start,
-            end,
-            fallback_adapter=Rest(),
+    def next_month_ms(value: int) -> int:
+        dt = datetime.fromtimestamp(value / 1000, UTC)
+        if dt.month == 12:
+            nxt = datetime(dt.year + 1, 1, 1, tzinfo=UTC)
+        else:
+            nxt = datetime(dt.year, dt.month + 1, 1, tzinfo=UTC)
+        return int(nxt.timestamp() * 1000)
+
+    # Decompose arbitrary multi-month research ranges. Every complete UTC month uses
+    # one Binance Vision monthly archive; only partial leading/trailing ranges use
+    # daily checkpoints. This is critical for large universe research because a
+    # Jan-Sep request becomes ~8 monthly archives + September daily remainder
+    # instead of ~269 daily archive requests per symbol.
+    receipt_ids = []
+    cursor = start
+    vision = Vision()
+    rest = Rest()
+    while cursor < end:
+        is_month_boundary = cursor == month_start_ms(cursor)
+        month_end = next_month_ms(cursor)
+        if is_month_boundary and month_end <= end:
+            receipt_ids.extend(
+                sync_month(
+                    store,
+                    vision,
+                    "ohlcv",
+                    symbol,
+                    timeframe,
+                    cursor,
+                    month_end,
+                    fallback_adapter=rest,
+                )
+            )
+            cursor = month_end
+            continue
+
+        stop = min(end, month_end)
+        receipt_ids.extend(
+            sync(
+                store,
+                vision,
+                "ohlcv",
+                symbol,
+                timeframe,
+                cursor,
+                stop,
+                fallback_adapter=rest,
+            )
         )
-    else:
-        receipt_ids = sync(
-            store,
-            Vision(),
-            "ohlcv",
-            symbol,
-            timeframe,
-            start,
-            end,
-            fallback_adapter=Rest(),
-        )
+        cursor = stop
     receipts = [store.receipt(rid) for rid in receipt_ids]
     paths = [str(store.root / receipt["path"]) for receipt in receipts]
     if not paths:
