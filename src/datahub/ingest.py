@@ -85,7 +85,6 @@ class Rest:
             "request_end": end,
         }
 
-
     def metadata(self):
         return self.http.get("https://fapi.binance.com/fapi/v1/exchangeInfo").json()
 
@@ -132,6 +131,7 @@ class Vision:
             "url": url,
             "archive_sha256": actual,
         }
+
     def fetch_month(self, kind, symbol, timeframe, start, end):
         if kind == "funding":
             raise ValueError("Funding uses REST; Vision funding archive is not assumed")
