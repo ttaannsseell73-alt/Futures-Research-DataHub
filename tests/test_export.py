@@ -53,7 +53,6 @@ def test_fetch_csv_exports_verified_cached_partition(tmp_path, monkeypatch):
 
 
 def test_fetch_csv_decomposes_multi_month_range_into_monthly_and_daily(tmp_path, monkeypatch):
-    import pyarrow as pa
     import pyarrow.parquet as pq
     from datetime import UTC, datetime
 
