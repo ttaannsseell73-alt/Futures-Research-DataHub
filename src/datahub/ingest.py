@@ -85,6 +85,61 @@ class Rest:
             "request_end": end,
         }
 
+
+    def fetch_month(self, kind, symbol, timeframe, start, end):
+        if kind == "funding":
+            raise ValueError("Funding uses REST; Vision funding archive is not assumed")
+        safe_symbol(symbol)
+        if timeframe not in INTERVALS:
+            raise ValueError("Unsupported timeframe")
+        start_dt = datetime.fromtimestamp(start / 1000, UTC)
+        end_dt = datetime.fromtimestamp(end / 1000, UTC)
+        if (
+            start_dt.day != 1
+            or start_dt.hour
+            or start_dt.minute
+            or start_dt.second
+            or start_dt.microsecond
+        ):
+            raise ValueError("Monthly Vision sync requires a UTC month boundary")
+        if start_dt.month == 12:
+            expected_end = datetime(start_dt.year + 1, 1, 1, tzinfo=UTC)
+        else:
+            expected_end = datetime(start_dt.year, start_dt.month + 1, 1, tzinfo=UTC)
+        if end_dt != expected_end:
+            raise ValueError("Monthly Vision sync requires exactly one complete UTC month")
+
+        month = start_dt.strftime("%Y-%m")
+        name = f"{symbol}-{timeframe}-{month}.zip"
+        parts = [
+            "data",
+            "futures",
+            "um",
+            "monthly",
+            ENDPOINTS[kind],
+            symbol,
+            timeframe,
+            name,
+        ]
+        url = "https://data.binance.vision/" + "/".join(quote(part, safe="") for part in parts)
+        checksum = self.http.get(url + ".CHECKSUM").text.split()[0].lower()
+        raw = self.http.get(url).content
+        actual = hashlib.sha256(raw).hexdigest()
+        if actual != checksum:
+            raise ValueError("Vision monthly archive SHA256 mismatch")
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            members = [m for m in z.infolist() if m.filename.endswith(".csv")]
+            if len(members) != 1 or members[0].file_size > 512 * 1024 * 1024:
+                raise ValueError("Unexpected monthly archive content/size")
+            rows = list(csv.reader(io.TextIOWrapper(z.open(members[0]), encoding="utf-8-sig")))
+        if rows and rows[0][0] in ("open_time", "open time", "open_timestamp"):
+            rows = rows[1:]
+        return normalize(rows, kind), {
+            "source": "binance_vision_monthly",
+            "url": url,
+            "archive_sha256": actual,
+        }
+
     def metadata(self):
         return self.http.get("https://fapi.binance.com/fapi/v1/exchangeInfo").json()
 
