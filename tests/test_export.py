@@ -28,12 +28,12 @@ def test_fetch_csv_exports_verified_cached_partition(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_sync_range(store_arg, adapter, kind, symbol, timeframe, start, end):
-        calls.append((adapter.name, kind, symbol, timeframe, start, end))
+    def fake_sync(store_arg, adapter, kind, symbol, timeframe, start, end, fallback_adapter=None):
+        calls.append((adapter.name, fallback_adapter.name, kind, symbol, timeframe, start, end))
         assert store_arg is store
         return [rid]
 
-    monkeypatch.setattr("datahub.export.sync_range", fake_sync_range)
+    monkeypatch.setattr("datahub.export.sync", fake_sync)
     output = tmp_path / "btc.csv"
     result = fetch_ohlcv_csv(
         store,
@@ -46,7 +46,7 @@ def test_fetch_csv_exports_verified_cached_partition(tmp_path, monkeypatch):
 
     assert result["status"] == "READY"
     assert result["rows"] == 2
-    assert calls == [("rest", "ohlcv", "BTCUSDT", "1m", START, START + 120_000)]
+    assert calls == [("vision", "rest", "ohlcv", "BTCUSDT", "1m", START, START + 120_000)]
 
     with output.open(newline="", encoding="utf-8") as stream:
         exported = list(csv.reader(stream))
@@ -55,7 +55,7 @@ def test_fetch_csv_exports_verified_cached_partition(tmp_path, monkeypatch):
     assert exported[2][0] == str(START + 60_000)
 
 
-def test_fetch_csv_decomposes_multi_month_range_into_monthly_and_ranged_rest(tmp_path, monkeypatch):
+def test_fetch_csv_decomposes_multi_month_range_into_monthly_and_daily(tmp_path, monkeypatch):
 
     root = tmp_path / "data"
     root.mkdir()
@@ -85,12 +85,12 @@ def test_fetch_csv_decomposes_multi_month_range_into_monthly_and_ranged_rest(tmp
         calls.append(("month", start, end))
         return ["jan" if start == jan else "feb"]
 
-    def fake_range(store_arg, adapter, kind, symbol, timeframe, start, end):
-        calls.append(("range", adapter.name, start, end))
+    def fake_day(store_arg, adapter, kind, symbol, timeframe, start, end, fallback_adapter=None):
+        calls.append(("day", adapter.name, fallback_adapter.name, start, end))
         return ["mar"]
 
     monkeypatch.setattr("datahub.export.sync_month", fake_month)
-    monkeypatch.setattr("datahub.export.sync_range", fake_range)
+    monkeypatch.setattr("datahub.export.sync", fake_day)
 
     output = tmp_path / "range.csv"
     result = fetch_ohlcv_csv(FakeStore(root), "BTCUSDT", "15m", jan, mar15, output)
@@ -99,5 +99,5 @@ def test_fetch_csv_decomposes_multi_month_range_into_monthly_and_ranged_rest(tmp
     assert calls == [
         ("month", jan, feb),
         ("month", feb, mar),
-        ("range", "rest", mar, mar15),
+        ("day", "vision", "rest", mar, mar15),
     ]
