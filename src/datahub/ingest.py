@@ -185,4 +185,3 @@ class Vision:
             "url": url,
             "archive_sha256": actual,
         }
-
