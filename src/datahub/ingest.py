@@ -86,6 +86,52 @@ class Rest:
         }
 
 
+    def metadata(self):
+        return self.http.get("https://fapi.binance.com/fapi/v1/exchangeInfo").json()
+
+
+class Vision:
+    name = "vision"
+
+    def __init__(self, http=None):
+        self.http = http or HTTP()
+
+    def fetch(self, kind, symbol, timeframe, start, end):
+        if kind == "funding":
+            raise ValueError("Funding uses REST; Vision funding archive is not assumed")
+        safe_symbol(symbol)
+        if timeframe not in INTERVALS or start % 86_400_000 or end - start != 86_400_000:
+            raise ValueError("Vision sync requires a complete UTC day")
+        date = datetime.fromtimestamp(start / 1000, UTC).strftime("%Y-%m-%d")
+        name = f"{symbol}-{timeframe}-{date}.zip"
+        parts = [
+            "data",
+            "futures",
+            "um",
+            "daily",
+            ENDPOINTS[kind],
+            symbol,
+            timeframe,
+            name,
+        ]
+        url = "https://data.binance.vision/" + "/".join(quote(part, safe="") for part in parts)
+        checksum = self.http.get(url + ".CHECKSUM").text.split()[0].lower()
+        raw = self.http.get(url).content
+        actual = hashlib.sha256(raw).hexdigest()
+        if actual != checksum:
+            raise ValueError("Vision archive SHA256 mismatch")
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            members = [m for m in z.infolist() if m.filename.endswith(".csv")]
+            if len(members) != 1 or members[0].file_size > 256 * 1024 * 1024:
+                raise ValueError("Unexpected archive content/size")
+            rows = list(csv.reader(io.TextIOWrapper(z.open(members[0]), encoding="utf-8-sig")))
+        if rows and rows[0][0] in ("open_time", "open time", "open_timestamp"):
+            rows = rows[1:]
+        return normalize(rows, kind), {
+            "source": "binance_vision",
+            "url": url,
+            "archive_sha256": actual,
+        }
     def fetch_month(self, kind, symbol, timeframe, start, end):
         if kind == "funding":
             raise ValueError("Funding uses REST; Vision funding archive is not assumed")
@@ -140,49 +186,3 @@ class Rest:
             "archive_sha256": actual,
         }
 
-    def metadata(self):
-        return self.http.get("https://fapi.binance.com/fapi/v1/exchangeInfo").json()
-
-
-class Vision:
-    name = "vision"
-
-    def __init__(self, http=None):
-        self.http = http or HTTP()
-
-    def fetch(self, kind, symbol, timeframe, start, end):
-        if kind == "funding":
-            raise ValueError("Funding uses REST; Vision funding archive is not assumed")
-        safe_symbol(symbol)
-        if timeframe not in INTERVALS or start % 86_400_000 or end - start != 86_400_000:
-            raise ValueError("Vision sync requires a complete UTC day")
-        date = datetime.fromtimestamp(start / 1000, UTC).strftime("%Y-%m-%d")
-        name = f"{symbol}-{timeframe}-{date}.zip"
-        parts = [
-            "data",
-            "futures",
-            "um",
-            "daily",
-            ENDPOINTS[kind],
-            symbol,
-            timeframe,
-            name,
-        ]
-        url = "https://data.binance.vision/" + "/".join(quote(part, safe="") for part in parts)
-        checksum = self.http.get(url + ".CHECKSUM").text.split()[0].lower()
-        raw = self.http.get(url).content
-        actual = hashlib.sha256(raw).hexdigest()
-        if actual != checksum:
-            raise ValueError("Vision archive SHA256 mismatch")
-        with zipfile.ZipFile(io.BytesIO(raw)) as z:
-            members = [m for m in z.infolist() if m.filename.endswith(".csv")]
-            if len(members) != 1 or members[0].file_size > 256 * 1024 * 1024:
-                raise ValueError("Unexpected archive content/size")
-            rows = list(csv.reader(io.TextIOWrapper(z.open(members[0]), encoding="utf-8-sig")))
-        if rows and rows[0][0] in ("open_time", "open time", "open_timestamp"):
-            rows = rows[1:]
-        return normalize(rows, kind), {
-            "source": "binance_vision",
-            "url": url,
-            "archive_sha256": actual,
-        }
