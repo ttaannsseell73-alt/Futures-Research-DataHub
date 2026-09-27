@@ -106,7 +106,6 @@ def sync(store, adapter, kind, symbol, timeframe, start, end, fallback_adapter=N
     return receipts
 
 
-
 def sync_month(store, adapter, kind, symbol, timeframe, start, end, fallback_adapter=None):
     """Sync exactly one complete UTC month as one verified partition."""
     safe_symbol(symbol)
