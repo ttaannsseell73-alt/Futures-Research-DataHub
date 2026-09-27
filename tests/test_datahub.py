@@ -266,7 +266,7 @@ def test_cli_real_process(tmp_path):
 
 def test_vision_monthly_archive_and_cached_sync(tmp_path):
     start = 1767225600000  # 2026-01-01T00:00:00Z
-    end = 1769904000000    # 2026-02-01T00:00:00Z
+    end = 1769904000000  # 2026-02-01T00:00:00Z
     step = 900000
     rows = [[t, "10", "12", "9", "11", "2"] for t in range(start, end, step)]
 
