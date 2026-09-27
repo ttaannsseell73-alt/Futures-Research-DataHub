@@ -106,6 +106,64 @@ def sync(store, adapter, kind, symbol, timeframe, start, end, fallback_adapter=N
     return receipts
 
 
+def sync_range(store, adapter, kind, symbol, timeframe, start, end):
+    """Sync one arbitrary historical range in a single adapter request/checkpoint.
+
+    Intended for REST ranges where pagination is cheaper than many daily archive requests.
+    """
+    safe_symbol(symbol)
+    if kind not in KINDS or timeframe not in INTERVALS:
+        raise ValueError("Unsupported dataset/timeframe")
+    if start >= end or end > int(datetime.now(UTC).timestamp() * 1000):
+        raise ValueError("Require a nonempty historical interval")
+    if kind != "funding" and (start % INTERVALS[timeframe] or end % INTERVALS[timeframe]):
+        raise ValueError("Bounds must align with timeframe; exclude open candles")
+
+    job = {
+        "source": adapter.name,
+        "granularity": "range",
+        "dataset": kind,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "start": start,
+        "end": end,
+        "schema_version": 1,
+    }
+    key = fingerprint(job)
+    checkpoint = store.root / f"checkpoints/{key}.json"
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+
+    with FileLock(str(checkpoint) + ".lock", timeout=30):
+        if checkpoint.exists():
+            state = store.json(f"checkpoints/{key}.json")
+            if state["status"] == "COMPLETE":
+                store.receipt(state["receipt_id"])
+                return [state["receipt_id"]]
+
+        atomic_json(checkpoint, dict(job, status="RUNNING", updated_at=utcnow()))
+        try:
+            table, provenance = adapter.fetch(kind, symbol, timeframe, start, end)
+            rid = store.put(table, kind, symbol, timeframe, start, end, provenance)
+        except Exception as exc:
+            atomic_json(
+                checkpoint,
+                dict(job, status="FAILED", error=str(exc), updated_at=utcnow()),
+            )
+            raise
+
+        atomic_json(
+            checkpoint,
+            dict(
+                job,
+                status="COMPLETE",
+                receipt_id=rid,
+                source_used=adapter.name,
+                updated_at=utcnow(),
+            ),
+        )
+        return [rid]
+
+
 def sync_month(store, adapter, kind, symbol, timeframe, start, end, fallback_adapter=None):
     """Sync exactly one complete UTC month as one verified partition."""
     safe_symbol(symbol)
