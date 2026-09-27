@@ -12,7 +12,7 @@ jobs:
     if: >-
       github.event.issue.author_association == 'OWNER' &&
       startsWith(github.event.issue.title, '[SR25 DATAHUB RUN]')
-    runs-on: [self-hosted, datahub-local]
+    runs-on: [self-hosted]
     timeout-minutes: 360
     env:
       FREQTRADE_FUTURES_ROOT: C:/Users/TANSEL/Desktop/SCALPING_LAB/freqtrade/user_data/data/binance/futures
