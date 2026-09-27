@@ -10,7 +10,7 @@ import duckdb
 
 from .core import INTERVALS, safe_symbol
 from .ingest import Rest, Vision
-from .sync import sync, sync_month
+from .sync import sync_month, sync_range
 
 CSV_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
@@ -20,7 +20,7 @@ def fetch_ohlcv_csv(store, symbol: str, timeframe: str, start: int, end: int, ou
 
     Complete UTC calendar months use Binance Vision monthly archives; other ranges use UTC-day
     checkpoints. Re-running the same request reuses verified checkpoints on local/self-hosted
-    runners. Vision is primary and REST/daily sync is the explicit fallback.
+    runners. Complete months use Vision monthly archives; partial months use ranged REST pagination.
     """
     safe_symbol(symbol)
     if timeframe not in INTERVALS:
@@ -42,9 +42,9 @@ def fetch_ohlcv_csv(store, symbol: str, timeframe: str, start: int, end: int, ou
 
     # Decompose arbitrary multi-month research ranges. Every complete UTC month uses
     # one Binance Vision monthly archive; only partial leading/trailing ranges use
-    # daily checkpoints. This is critical for large universe research because a
-    # Jan-Sep request becomes ~8 monthly archives + September daily remainder
-    # instead of ~269 daily archive requests per symbol.
+    # one ranged REST request (internally paginated). This is critical for large-universe research:
+    # Jan-Sep becomes 8 monthly archives + a few REST pages for September instead of ~269 daily
+    # archive requests per symbol.
     receipt_ids = []
     cursor = start
     vision = Vision()
@@ -70,15 +70,14 @@ def fetch_ohlcv_csv(store, symbol: str, timeframe: str, start: int, end: int, ou
 
         stop = min(end, month_end)
         receipt_ids.extend(
-            sync(
+            sync_range(
                 store,
-                vision,
+                rest,
                 "ohlcv",
                 symbol,
                 timeframe,
                 cursor,
                 stop,
-                fallback_adapter=rest,
             )
         )
         cursor = stop
