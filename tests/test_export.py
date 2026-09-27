@@ -56,7 +56,6 @@ def test_fetch_csv_exports_verified_cached_partition(tmp_path, monkeypatch):
 
 
 def test_fetch_csv_decomposes_multi_month_range_into_monthly_and_daily(tmp_path, monkeypatch):
-
     root = tmp_path / "data"
     root.mkdir()
     objects = root / "objects"
@@ -77,10 +76,12 @@ def test_fetch_csv_decomposes_multi_month_range_into_monthly_and_daily(tmp_path,
     class FakeStore:
         def __init__(self, root):
             self.root = root
+
         def receipt(self, rid):
             return receipts[rid]
 
     calls = []
+
     def fake_month(store_arg, adapter, kind, symbol, timeframe, start, end, fallback_adapter=None):
         calls.append(("month", start, end))
         return ["jan" if start == jan else "feb"]
