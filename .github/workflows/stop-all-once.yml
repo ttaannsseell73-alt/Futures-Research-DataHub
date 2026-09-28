@@ -1,0 +1,35 @@
+name: Stop All Active Runs Once
+
+on:
+  push:
+    paths:
+      - '.stop-all-trigger'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  stop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Force-cancel every other active run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SELF_RUN: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 3
+          for status in queued in_progress waiting requested pending; do
+            gh api "repos/$REPO/actions/runs?status=$status&per_page=100" --paginate --jq '.workflow_runs[].id' || true
+          done | sort -u > /tmp/active-runs.txt
+          while read -r run_id; do
+            [ -z "$run_id" ] && continue
+            [ "$run_id" = "$SELF_RUN" ] && continue
+            current="$(gh api "repos/$REPO/actions/runs/$run_id" --jq '.status' 2>/dev/null || echo completed)"
+            [ "$current" = "completed" ] && continue
+            gh api --method POST "repos/$REPO/actions/runs/$run_id/force-cancel" >/dev/null 2>&1 || true
+            echo "force-cancelled $run_id"
+          done < /tmp/active-runs.txt
