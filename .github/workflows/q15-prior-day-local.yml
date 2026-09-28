@@ -1,0 +1,299 @@
+name: QUSDT 15m Prior-Day Sweep Local
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  run:
+    if: >-
+      github.event.issue.author_association == 'OWNER' &&
+      startsWith(github.event.issue.title, '[Q15 PDS RUN]')
+    runs-on: [self-hosted]
+    timeout-minutes: 60
+    env:
+      FREQTRADE_FUTURES_ROOT: C:/Users/TANSEL/Desktop/SCALPING_LAB/freqtrade/user_data/data/binance/futures
+      DATAHUB_PYTHON: C:/actions-runner-datahub/.venv-datahub/Scripts/python.exe
+
+    steps:
+      - name: Checkout DataHub
+        uses: actions/checkout@v4
+        with:
+          path: datahub
+
+      - name: Checkout TradingView Research Lab
+        uses: actions/checkout@v4
+        with:
+          repository: ttaannsseell73-alt/TradingView-Research-Lab
+          ref: main
+          path: tradingview-lab
+          persist-credentials: false
+
+      - name: Refresh QUSDT local 1m history
+        shell: powershell
+        working-directory: tradingview-lab
+        run: |
+          $ErrorActionPreference = "Stop"
+          & $env:DATAHUB_PYTHON scripts/update-local-futures-dataset.py `
+            --root $env:FREQTRADE_FUTURES_ROOT `
+            --start 2026-08-30 `
+            --end 2026-09-29 `
+            --symbols QUSDT `
+            --workers 2 `
+            --symbol-workers 1 `
+            --report q15-dataset-update.json
+
+      - name: Build QUSDT 15m canonical snapshot including today's closed bars
+        shell: powershell
+        working-directory: tradingview-lab
+        run: |
+          $ErrorActionPreference = "Stop"
+          @'
+          import json, time, urllib.request, urllib.parse
+          from pathlib import Path
+          from datetime import datetime, timezone
+          import polars as pl
+
+          root = Path(r"C:/Users/TANSEL/Desktop/SCALPING_LAB/freqtrade/user_data/data/binance/futures")
+          src = root / "Q_USDT_USDT-1m-futures.feather"
+          if not src.exists():
+              raise SystemExit(f"Missing local source: {src}")
+
+          df = pl.read_ipc(src)
+          lower = {c.lower(): c for c in df.columns}
+          tc = next((lower[x] for x in ("date","timestamp","time","t") if x in lower), None)
+          if not tc:
+              raise SystemExit("No timestamp column")
+          dtype = df.schema[tc]
+          if isinstance(dtype, pl.Datetime):
+              texpr = pl.col(tc).dt.epoch("ms")
+          elif dtype == pl.Date:
+              texpr = pl.col(tc).cast(pl.Datetime("ms")).dt.epoch("ms")
+          elif dtype.is_integer():
+              texpr = pl.col(tc).cast(pl.Int64)
+          else:
+              texpr = pl.col(tc).str.to_datetime(strict=False, time_zone="UTC").dt.epoch("ms")
+
+          base = df.select(
+              texpr.alias("t"),
+              pl.col(lower["open"]).cast(pl.Float64).alias("o"),
+              pl.col(lower["high"]).cast(pl.Float64).alias("h"),
+              pl.col(lower["low"]).cast(pl.Float64).alias("l"),
+              pl.col(lower["close"]).cast(pl.Float64).alias("c"),
+              pl.col(lower["volume"]).cast(pl.Float64).alias("v"),
+          ).drop_nulls().sort("t")
+
+          if base.height:
+              sample = int(base["t"][0])
+              if sample < 10_000_000_000:
+                  base = base.with_columns((pl.col("t") * 1000).alias("t"))
+              elif sample > 10_000_000_000_000_000:
+                  base = base.with_columns((pl.col("t") // 1_000_000).alias("t"))
+              elif sample > 10_000_000_000_000:
+                  base = base.with_columns((pl.col("t") // 1000).alias("t"))
+
+          start_ms = int(datetime(2026,8,30,tzinfo=timezone.utc).timestamp()*1000)
+          today_ms = int(datetime(2026,9,28,tzinfo=timezone.utc).timestamp()*1000)
+          now_ms = int(time.time()*1000)
+
+          hist = base.filter((pl.col("t") >= start_ms) & (pl.col("t") < today_ms))
+
+          params = urllib.parse.urlencode({
+              "symbol":"QUSDT","interval":"15m","startTime":today_ms,"limit":1500
+          })
+          req = urllib.request.Request(
+              "https://fapi.binance.com/fapi/v1/klines?" + params,
+              headers={"User-Agent":"Mozilla/5.0 Q15-Local-Test/1.0","Accept":"application/json"}
+          )
+          with urllib.request.urlopen(req, timeout=30) as r:
+              raw = json.loads(r.read().decode("utf-8"))
+          live_rows = []
+          for k in raw:
+              if int(k[6]) >= now_ms:
+                  continue
+              live_rows.append({
+                  "t": int(k[0]), "o": float(k[1]), "h": float(k[2]),
+                  "l": float(k[3]), "c": float(k[4]), "v": float(k[5])
+              })
+          live = pl.DataFrame(live_rows) if live_rows else pl.DataFrame(
+              schema={"t":pl.Int64,"o":pl.Float64,"h":pl.Float64,"l":pl.Float64,"c":pl.Float64,"v":pl.Float64}
+          )
+
+          bucket = 900_000
+          hist15 = (
+              hist.with_columns(((pl.col("t") // bucket) * bucket).alias("_b"))
+              .group_by("_b", maintain_order=True)
+              .agg(
+                  pl.col("o").first().alias("o"),
+                  pl.col("h").max().alias("h"),
+                  pl.col("l").min().alias("l"),
+                  pl.col("c").last().alias("c"),
+                  pl.col("v").sum().alias("v"),
+              )
+              .rename({"_b":"t"})
+              .sort("t")
+          )
+
+          merged = pl.concat([hist15, live], how="vertical_relaxed").unique(subset=["t"], keep="last").sort("t")
+          merged.write_csv("q15-canonical.csv")
+          manifest = {
+              "rows": merged.height,
+              "first": int(merged["t"][0]) if merged.height else None,
+              "last": int(merged["t"][-1]) if merged.height else None,
+              "todayClosedBars": live.height,
+              "snapshotAtMs": now_ms
+          }
+          Path("q15-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+          print(json.dumps(manifest))
+          '@ | Set-Content q15-build.py -Encoding UTF8
+          & $env:DATAHUB_PYTHON q15-build.py
+
+      - name: Run exact sr25-v1 Prior-Day Sweep replay
+        shell: powershell
+        working-directory: tradingview-lab
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          @'
+          import fs from 'node:fs';
+          import { STRATEGIES, evaluateStrategies } from './research/strategy_engine_v2.mjs';
+
+          const rows = fs.readFileSync('q15-canonical.csv','utf8').trim().split(/\r?\n/);
+          const candles = rows.slice(1).map(line => {
+            const [t,o,h,l,c,v] = line.split(',').map(Number);
+            return {t,o,h,l,c,v};
+          }).filter(b => Object.values(b).every(Number.isFinite));
+
+          const strategyId = 'sr25_previous_day_sweep';
+          const strategy = STRATEGIES.find(s => s.id === strategyId);
+          if (!strategy) throw new Error('Canonical strategy not found: '+strategyId);
+          if (strategy.version !== 'sr25-v1') throw new Error('Unexpected strategy version: '+strategy.version);
+
+          const start = Date.parse('2026-09-01T00:00:00Z');
+          const requestedEnd = Date.parse('2026-09-29T00:00:00Z');
+          const lastBar = candles.at(-1)?.t ?? 0;
+          const end = Math.min(requestedEnd, lastBar + 900000);
+          if (!(end > start)) throw new Error('No September data available');
+
+          const raw = strategy.signal(candles);
+          const trades = [];
+          let pos=0, entryPrice=0, entryTime=0;
+          for (let i=0;i<raw.length-1;i++) {
+            const s=raw[i];
+            if (!s || s===pos) continue;
+            const px=candles[i+1].o, tm=candles[i+1].t;
+            if (tm < start || tm >= end) continue;
+            if (pos) {
+              const gross=pos===1 ? px/entryPrice-1 : entryPrice/px-1;
+              trades.push({side:pos,entryTime,exitTime:tm,gross,forced:false});
+            }
+            pos=s; entryPrice=px; entryTime=tm;
+          }
+          if (pos && entryTime < end) {
+            const usable = candles.filter(b => b.t < end);
+            const b = usable.at(-1);
+            if (b) {
+              const gross=pos===1 ? b.c/entryPrice-1 : entryPrice/b.c-1;
+              trades.push({side:pos,entryTime,exitTime:b.t,gross,forced:true});
+            }
+          }
+
+          const cost=0.0014, stressCost=0.0015, lowCost=0.0006;
+          function stats(ts, fee) {
+            let eq=1, peak=1, dd=0, wins=0, gw=0, gl=0;
+            for (const t of ts) {
+              const r=t.gross-fee;
+              if (r>0){wins++;gw+=r;} else if (r<0) gl+=r;
+              eq*=Math.max(1e-9,1+r); peak=Math.max(peak,eq); dd=Math.max(dd,1-eq/peak);
+            }
+            return {
+              n:ts.length, wr:ts.length?wins/ts.length:0, net:eq-1,
+              pf:gl<0?gw/Math.abs(gl):(gw>0?999:0), dd
+            };
+          }
+
+          const engine = evaluateStrategies(candles, {
+            cost, stressCost, lowCost, minTrades:1, start, end,
+            strategyIds:[strategyId]
+          })[0];
+
+          const exact = stats(trades,cost);
+          const delta = {
+            n: exact.n - engine.n,
+            net: exact.net - engine.net,
+            pf: exact.pf - engine.pf,
+            dd: exact.dd - engine.dd
+          };
+          if (delta.n !== 0 || Math.abs(delta.net)>1e-12 || Math.abs(delta.pf)>1e-9 || Math.abs(delta.dd)>1e-12) {
+            throw new Error('Replay parity failure: '+JSON.stringify({exact,engine,delta}));
+          }
+
+          const daily = [];
+          for (let d=1; d<=28; d++) {
+            const ds=Date.UTC(2026,8,d), de=ds+86400000;
+            const ts=trades.filter(t=>t.entryTime>=ds && t.entryTime<de);
+            const st=stats(ts,cost);
+            daily.push({
+              date:new Date(ds).toISOString().slice(0,10),
+              complete: de <= end,
+              ...st,
+              long:ts.filter(t=>t.side===1).length,
+              short:ts.filter(t=>t.side===-1).length,
+              forcedCloses:ts.filter(t=>t.forced).length
+            });
+          }
+
+          const report = {
+            symbol:'QUSDT', timeframe:'15m',
+            strategy:{id:strategy.id,name:strategy.name,version:strategy.version,mode:strategy.mode},
+            window:{start:new Date(start).toISOString(),end:new Date(end).toISOString()},
+            cost,stressCost,lowCost,
+            parityVerified:true,
+            overall:{
+              ...exact,
+              stressNet:stats(trades,stressCost).net,
+              lowCostNet:stats(trades,lowCost).net,
+              long:trades.filter(t=>t.side===1).length,
+              short:trades.filter(t=>t.side===-1).length
+            },
+            daily
+          };
+          fs.mkdirSync('artifacts/q15-pds',{recursive:true});
+          fs.writeFileSync('artifacts/q15-pds/result.json',JSON.stringify(report,null,2)+'\n');
+
+          const today=daily.find(x=>x.date==='2026-09-28');
+          const pct=x=>(100*x).toFixed(2)+'%';
+          const msg=[
+            'QUSDT 15m Prior-Day Sweep local replay tamamlandı.',
+            '',
+            '**Canonical:** '+strategy.id+' / '+strategy.version,
+            '**Parity:** PASS',
+            '**Window:** '+report.window.start+' → '+report.window.end,
+            '**Overall:** '+exact.n+' trade | net '+pct(exact.net)+' | PF '+exact.pf.toFixed(2)+' | WR '+pct(exact.wr)+' | DD '+pct(exact.dd),
+            '**28 Sep:** '+today.n+' trade | net '+pct(today.net)+' | PF '+today.pf.toFixed(2)+' | WR '+pct(today.wr)+' | complete='+today.complete,
+            '',
+            'Artifact: q15-pds-result'
+          ].join('\n');
+          fs.writeFileSync('artifacts/q15-pds/summary.md',msg+'\n');
+          console.log(msg);
+          '@ | Set-Content q15-run.mjs -Encoding UTF8
+          node q15-run.mjs
+          gh issue comment $env:ISSUE_NUMBER --body-file artifacts/q15-pds/summary.md
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: q15-pds-result
+          path: |
+            tradingview-lab/artifacts/q15-pds/result.json
+            tradingview-lab/artifacts/q15-pds/summary.md
+            tradingview-lab/q15-manifest.json
+            tradingview-lab/q15-dataset-update.json
+          if-no-files-found: warn
