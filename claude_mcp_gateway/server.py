@@ -81,7 +81,7 @@ class Config:
             token=(env.get("CLAUDE_MCP_TOKEN") or "").strip(),
             supabase_url=url if url.startswith("https://") else "",
             anon_jwt=(env.get("SUPABASE_ANON_JWT") or "").strip(),
-            bridge_secret=(env.get("V4_BRIDGE_SECRET") or "").strip(),
+            bridge_secret=(env.get("V4_BRIDGE_SECRET") or env.get("CLAUDE_MCP_TOKEN") or "").strip(),
         )
 
     @property
