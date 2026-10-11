@@ -17,7 +17,7 @@ from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 MODES = ("readonly", "full", "off")
 MUTATION_GUARD = "I_UNDERSTAND_DUPLICATE_RISK"
 # poll and complete belong to the Windows bridge and are never called from here.
@@ -375,7 +375,10 @@ class Gateway:
                 "next": "call command_result with this command_id; do not repeat the original call"}
 
     async def _poll(self, command_id: str, deadline: float) -> dict[str, Any]:
-        while (remaining := deadline - self._clock()) > POLL_INTERVAL_SECONDS:
+        for _ in range(int(READ_DEADLINE_SECONDS / POLL_INTERVAL_SECONDS)):
+            remaining = deadline - self._clock()
+            if remaining <= POLL_INTERVAL_SECONDS:
+                break
             await self._sleep(POLL_INTERVAL_SECONDS)
             try:
                 status, data = await self.bridge.call("result", {"command_id": command_id}, read_timeout=remaining)
