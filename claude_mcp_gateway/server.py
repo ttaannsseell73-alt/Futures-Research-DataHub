@@ -153,6 +153,35 @@ def _command_id(name: str, value: Any) -> str:
     return value
 
 
+UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", re.I)
+HASH_RE = re.compile(r"[0-9a-f]{64}", re.I)
+GIT_HEAD_RE = re.compile(r"[0-9a-f]{40}", re.I)
+
+def _uuid(name: str, value: Any) -> str:
+    if not isinstance(value, str) or not UUID_RE.fullmatch(value):
+        raise Invalid(f"{name} must be a UUID")
+    return value
+
+def _hash_or_absent(name: str, value: Any) -> str:
+    if not isinstance(value, str) or (value != "absent" and not HASH_RE.fullmatch(value)):
+        raise Invalid(f"{name} must be SHA256 or absent")
+    return value
+
+def _git_head(name: str, value: Any) -> str:
+    if not isinstance(value, str) or not GIT_HEAD_RE.fullmatch(value):
+        raise Invalid(f"{name} must be a Git SHA")
+    return value
+
+def _script_arguments(name: str, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or len(value) > 32:
+        raise Invalid(f"{name} must be an object")
+    for key, val in value.items():
+        if (not isinstance(key, str) or not key or len(key) > 100
+                or type(val) not in (str, int, bool)
+                or (isinstance(val, str) and len(val) > 1000)):
+            raise Invalid(f"{name} has invalid entries")
+    return _json(64 * 1024, dict)(name, value)
+
 VALIDATORS: dict[str, Callable[[str, Any], Any]] = {
     "project": _text(128, empty=False),
     "relative_path": _text(1024),
@@ -176,10 +205,13 @@ VALIDATORS: dict[str, Callable[[str, Any], Any]] = {
     "payload": _json(MAX_TEXT_BYTES, dict),
     "command_id": _command_id,
     "script_id": _text(100, empty=False),
-    "arguments": _json(64 * 1024, dict),
-    "request_id": lambda name, value: str(uuid.UUID(_text(36, empty=False)(name, value))) if isinstance(value, str) and len(value) == 36 and re.fullmatch(r"[0-9a-fA-F-]{36}", value) else (_ for _ in ()).throw(Invalid(f"{name} must be a UUID")),
-    "expected_sha256": lambda name, value: value if isinstance(value, str) and (value == "absent" or re.fullmatch(r"[0-9a-fA-F]{64}", value)) else (_ for _ in ()).throw(Invalid(f"{name} must be SHA256 or absent")),
-    "expected_head": lambda name, value: value if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value) else (_ for _ in ()).throw(Invalid(f"{name} must be a Git SHA")),
+    "arguments": _script_arguments,
+    "request_id": _uuid,
+    "expected_sha256": _hash_or_absent,
+    "expected_head": _git_head,
+    "task": _text(12000, empty=False),
+    "workspace": _text(128, empty=False),
+    "rounds": _int(1, 3),
 }
 
 
@@ -331,6 +363,10 @@ class Gateway:
         return {**out, "request_id": request_id}
 
     def _completed(self, command_id: str | None, data: dict[str, Any]) -> dict[str, Any]:
+        inner = data.get("result")
+        if isinstance(inner, dict) and inner.get("status") in ("failed", "expired"):
+            return {"status": "error", "error": "upstream_" + inner["status"],
+                    "command_id": command_id, "retry": False, "result": self.bridge.shield(data)}
         return {"status": "completed", "command_id": command_id, "result": self.bridge.shield(data)}
 
     @staticmethod
@@ -544,82 +580,96 @@ def register_tools(mcp: MCPServer, gw: Gateway) -> None:
         return await gw.read("bank_status", "bank_status", device, {})
 
     @mut
-    async def action_run(action_id: str, args: dict[str, Any], device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue an allow-listed V4 action. Returns queued + command_id; never repeat on UNKNOWN_OUTCOME."""
-        return await gw.mutate("action_run", "action_run", device, {"action_id": action_id, "args": args})
+    async def action_run(action_id: str, request_id: str, device: Device = "main") -> dict[str, Any]:
+        """MUTATION. Run only a registered, reviewed action."""
+        return await gw.mutate("action_run", "action_run", device,
+                               {"action_id": action_id, "request_id": request_id},
+                               require=("action_id", "request_id"))
 
     @mut
     async def project_run(script_id: str, request_id: str, arguments: dict[str, Any] | None = None, device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Run a registered script ID only; never accept executable paths or shell text."""
+        """MUTATION. Run a registered script; no executable paths or shell text."""
         return await gw.mutate("project_run", "project_run", device,
                                {"script_id": script_id, "request_id": request_id, "arguments": arguments or {}},
                                require=("script_id", "request_id"))
 
     @mut
-    async def mkdir(project: str, relative_path: str, device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue directory creation."""
-        return await gw.mutate("mkdir", "mkdir", device, {"project": project, "relative_path": relative_path},
-                               require=("relative_path",))
+    async def mkdir(project: str, relative_path: str, request_id: str, device: Device = "main") -> dict[str, Any]:
+        """MUTATION. Create a directory inside an allowed project."""
+        return await gw.mutate("mkdir", "mkdir", device,
+                               {"project": project, "relative_path": relative_path, "request_id": request_id},
+                               require=("project", "relative_path", "request_id"))
 
     @mut
     async def write_text(project: str, relative_path: str, content: str, expected_sha256: str, request_id: str, device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue a text file write (content max 256 KiB)."""
+        """MUTATION. Compare-and-write; absent is permitted for new files."""
         return await gw.mutate("write_text", "write_text", device,
-                               {"project": project, "relative_path": relative_path, "content": content, "expected_sha256": expected_sha256, "request_id": request_id},
-                               require=("relative_path", "expected_sha256", "request_id"))
+                               {"project": project, "relative_path": relative_path, "content": content,
+                                "expected_sha256": expected_sha256, "request_id": request_id},
+                               require=("project", "relative_path", "expected_sha256", "request_id"))
 
     @mut
     async def patch_text(project: str, relative_path: str, old: str, new: str, expected_sha256: str, request_id: str, device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue a text replacement in a file."""
+        """MUTATION. Exact one-occurrence patch with file-hash guard."""
         return await gw.mutate("patch_text", "patch_text", device,
-                               {"project": project, "relative_path": relative_path, "old": old, "new": new, "expected_sha256": expected_sha256, "request_id": request_id},
-                               require=("relative_path", "old", "expected_sha256", "request_id"))
+                               {"project": project, "relative_path": relative_path, "old": old, "new": new,
+                                "expected_sha256": expected_sha256, "request_id": request_id},
+                               require=("project", "relative_path", "old", "expected_sha256", "request_id"))
 
     @mut
-    async def copy_path(project: str, source: str, destination: str, device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue a copy inside a project."""
+    async def copy_path(project: str, source: str, destination: str, request_id: str, device: Device = "main") -> dict[str, Any]:
+        """MUTATION. Copy one safe project file."""
         return await gw.mutate("copy_path", "copy_path", device,
-                               {"project": project, "source": source, "destination": destination},
-                               require=("source", "destination"))
+                               {"project": project, "source": source, "destination": destination, "request_id": request_id},
+                               require=("project", "source", "destination", "request_id"))
 
     @mut
-    async def move_path(project: str, source: str, destination: str, device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue a move inside a project."""
+    async def move_path(project: str, source: str, destination: str, request_id: str, device: Device = "main") -> dict[str, Any]:
+        """MUTATION. Move one safe project file."""
         return await gw.mutate("move_path", "move_path", device,
-                               {"project": project, "source": source, "destination": destination},
-                               require=("source", "destination"))
+                               {"project": project, "source": source, "destination": destination, "request_id": request_id},
+                               require=("project", "source", "destination", "request_id"))
 
     @mut
-    async def trash_path(project: str, relative_path: str, device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue moving a path to trash."""
-        return await gw.mutate("trash_path", "trash_path", device, {"project": project, "relative_path": relative_path},
-                               require=("relative_path",))
+    async def trash_path(project: str, relative_path: str, request_id: str, device: Device = "main") -> dict[str, Any]:
+        """MUTATION. Soft-delete a safe project file."""
+        return await gw.mutate("trash_path", "trash_path", device,
+                               {"project": project, "relative_path": relative_path, "request_id": request_id},
+                               require=("project", "relative_path", "request_id"))
 
     @mut
-    async def git_commit(project: str, message: str, device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue a git commit."""
-        return await gw.mutate("git_commit", "git_commit", device, {"project": project, "message": message})
+    async def git_commit(project: str, message: str, expected_head: str, request_id: str, device: Device = "main") -> dict[str, Any]:
+        """MUTATION. Git commit guarded by current HEAD."""
+        return await gw.mutate("git_commit", "git_commit", device,
+                               {"project": project, "message": message, "expected_head": expected_head, "request_id": request_id},
+                               require=("project", "message", "expected_head", "request_id"))
 
     @mut
-    async def git_restore_file(project: str, relative_path: str, device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue a git restore of one file."""
+    async def git_restore_file(project: str, relative_path: str, expected_sha256: str, request_id: str, device: Device = "main") -> dict[str, Any]:
+        """MUTATION. Restore one project file using expected hash."""
         return await gw.mutate("git_restore_file", "git_restore_file", device,
-                               {"project": project, "relative_path": relative_path}, require=("relative_path",))
+                               {"project": project, "relative_path": relative_path, "expected_sha256": expected_sha256,
+                                "request_id": request_id},
+                               require=("project", "relative_path", "expected_sha256", "request_id"))
 
     @mut
-    async def job_stop(job_id: str, device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue stopping a job."""
-        return await gw.mutate("job_stop", "job_stop", device, {"job_id": job_id})
+    async def job_stop(job_id: str, request_id: str, device: Device = "main") -> dict[str, Any]:
+        """MUTATION. Stop one registered job ID."""
+        return await gw.mutate("job_stop", "job_stop", device, {"job_id": job_id, "request_id": request_id},
+                               require=("job_id", "request_id"))
 
     @mut
-    async def stop_all_motors(device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue stopping all motors."""
-        return await gw.mutate("stop_all_motors", "stop_all_motors", device, {})
+    async def stop_all_motors(request_id: str, device: Device = "main") -> dict[str, Any]:
+        """MUTATION. Stop registered motor markers only."""
+        return await gw.mutate("stop_all_motors", "stop_all_motors", device, {"request_id": request_id},
+                               require=("request_id",))
 
     @mut
-    async def conference_run(payload: dict[str, Any], device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue a conference run with the given payload."""
-        return await gw.mutate("conference_run", "conference_run", device, {"payload": payload}, unwrap="payload")
+    async def conference_run(task: str, workspace: str, request_id: str, rounds: int = 2, device: Device = "main") -> dict[str, Any]:
+        """MUTATION. Registered analysis-only conference."""
+        return await gw.mutate("conference_run", "conference_run", device,
+                               {"task": task, "workspace": workspace, "rounds": rounds, "request_id": request_id},
+                               require=("task", "workspace", "request_id"))
 
 
 class GatewayASGI:
