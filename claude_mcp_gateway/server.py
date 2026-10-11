@@ -175,6 +175,11 @@ VALIDATORS: dict[str, Callable[[str, Any], Any]] = {
     "args": _json(64 * 1024, dict, list),
     "payload": _json(MAX_TEXT_BYTES, dict),
     "command_id": _command_id,
+    "script_id": _text(100, empty=False),
+    "arguments": _json(64 * 1024, dict),
+    "request_id": _text(36, empty=False),
+    "expected_sha256": _text(64, empty=False),
+    "expected_head": _text(40, empty=False),
 }
 
 
@@ -206,7 +211,10 @@ def _cid(data: Mapping[str, Any]) -> str | None:
 def _done(status: int, data: Mapping[str, Any]) -> bool:
     if status != 200 or data.get("completed") is False:
         return False
-    return str(data.get("status", "")).lower() not in PENDING_STATES
+    nested = data.get("result")
+    if isinstance(nested, dict) and isinstance(nested.get("status"), str):
+        return nested["status"].lower() in ("done", "failed", "expired")
+    return bool(data.get("completed") is True)
 
 
 class Bridge:
@@ -541,10 +549,11 @@ def register_tools(mcp: MCPServer, gw: Gateway) -> None:
         return await gw.mutate("action_run", "action_run", device, {"action_id": action_id, "args": args})
 
     @mut
-    async def project_run(project: str, runtime: str, script: str, args: list[str], device: Device = "main") -> dict[str, Any]:
-        """MUTATION. Queue a project script run."""
+    async def project_run(script_id: str, request_id: str, arguments: dict[str, Any] | None = None, device: Device = "main") -> dict[str, Any]:
+        """MUTATION. Run a registered script ID only; never accept executable paths or shell text."""
         return await gw.mutate("project_run", "project_run", device,
-                               {"project": project, "runtime": runtime, "script": script, "args": args})
+                               {"script_id": script_id, "request_id": request_id, "arguments": arguments or {}},
+                               require=("script_id", "request_id"))
 
     @mut
     async def mkdir(project: str, relative_path: str, device: Device = "main") -> dict[str, Any]:
@@ -553,18 +562,18 @@ def register_tools(mcp: MCPServer, gw: Gateway) -> None:
                                require=("relative_path",))
 
     @mut
-    async def write_text(project: str, relative_path: str, content: str, device: Device = "main") -> dict[str, Any]:
+    async def write_text(project: str, relative_path: str, content: str, expected_sha256: str, request_id: str, device: Device = "main") -> dict[str, Any]:
         """MUTATION. Queue a text file write (content max 256 KiB)."""
         return await gw.mutate("write_text", "write_text", device,
-                               {"project": project, "relative_path": relative_path, "content": content},
-                               require=("relative_path",))
+                               {"project": project, "relative_path": relative_path, "content": content, "expected_sha256": expected_sha256, "request_id": request_id},
+                               require=("relative_path", "expected_sha256", "request_id"))
 
     @mut
-    async def patch_text(project: str, relative_path: str, old: str, new: str, device: Device = "main") -> dict[str, Any]:
+    async def patch_text(project: str, relative_path: str, old: str, new: str, expected_sha256: str, request_id: str, device: Device = "main") -> dict[str, Any]:
         """MUTATION. Queue a text replacement in a file."""
         return await gw.mutate("patch_text", "patch_text", device,
-                               {"project": project, "relative_path": relative_path, "old": old, "new": new},
-                               require=("relative_path", "old"))
+                               {"project": project, "relative_path": relative_path, "old": old, "new": new, "expected_sha256": expected_sha256, "request_id": request_id},
+                               require=("relative_path", "old", "expected_sha256", "request_id"))
 
     @mut
     async def copy_path(project: str, source: str, destination: str, device: Device = "main") -> dict[str, Any]:
