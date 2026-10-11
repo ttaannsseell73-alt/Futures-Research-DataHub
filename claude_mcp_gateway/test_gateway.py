@@ -19,6 +19,9 @@ ENV = {
     "V4_BRIDGE_SECRET": SECRET,
 }
 FULL = {"GATEWAY_MODE": "full", "MUTATION_GUARD": server.MUTATION_GUARD}
+RID = "123e4567-e89b-12d3-a456-426614174000"
+HASH = "a" * 64
+HEAD = "b" * 40
 MUTATION_TOOLS = {
     "action_run", "project_run", "mkdir", "write_text", "patch_text", "copy_path", "move_path",
     "trash_path", "git_commit", "git_restore_file", "job_stop", "stop_all_motors", "conference_run",
@@ -219,6 +222,20 @@ class ReadTests(unittest.IsolatedAsyncioTestCase):
         out = await gw.tools["pc_status"]()
         self.assertEqual((out["status"], out["error"]), ("error", "upstream_invalid_json"))
 
+
+    async def test_pc_bridge_result_done_and_failed_states(self):
+        _, gw, calls = make(lambda request, n: httpx.Response(200, json={
+            "ok": True, "result": {"status": "done", "payload": {"ok": True}}
+        }))
+        result = await gw.tools["command_result"](command_id="123e4567-e89b-12d3-a456-426614174000")
+        self.assertEqual(result["status"], "completed")
+        _, gw, _ = make(lambda request, n: httpx.Response(200, json={
+            "ok": True, "result": {"status": "failed", "payload": {"error": "test_failed"}}
+        }))
+        result = await gw.tools["command_result"](command_id="123e4567-e89b-12d3-a456-426614174000")
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"], "upstream_failed")
+        self.assertFalse(result["retry"])
     async def test_rate_limit_burst(self):
         _, gw, calls = make(lambda request, n: httpx.Response(200, json={"ok": True}), clock=lambda: 0.0)
         outcomes = [(await gw.tools["gateway_health"]())["status"] for _ in range(server.RATE_BURST + 1)]
@@ -230,7 +247,7 @@ class ReadTests(unittest.IsolatedAsyncioTestCase):
 class MutationTests(unittest.IsolatedAsyncioTestCase):
     async def test_enqueue_returns_queued_immediately(self):
         _, gw, calls = make(lambda request, n: httpx.Response(200, json={"command_id": "cmd-7"}), **FULL)
-        out = await gw.tools["write_text"](project="p", relative_path="a.txt", content="hello")
+        out = await gw.tools["write_text"](project="p", relative_path="a.txt", content="hello", expected_sha256="absent", request_id=RID)
         self.assertEqual((out["status"], out["command_id"], out["retry"]), ("queued", "cmd-7", False))
         self.assertEqual(len(calls), 1)
         sent = body(calls[0])
@@ -244,7 +261,7 @@ class MutationTests(unittest.IsolatedAsyncioTestCase):
             raise httpx.ReadTimeout("timed out", request=request)
 
         _, gw, calls = make(handler, **FULL)
-        out = await gw.tools["git_commit"](project="p", message="msg")
+        out = await gw.tools["git_commit"](project="p", message="msg", expected_head=HEAD, request_id=RID)
         self.assertEqual(out["status"], "UNKNOWN_OUTCOME")
         self.assertIs(out["retry"], False)
         self.assertIsNone(out["command_id"])
@@ -253,10 +270,10 @@ class MutationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_5xx_is_unknown_and_4xx_is_definite_error(self):
         _, gw, calls = make(lambda request, n: httpx.Response(502, json={}), **FULL)
-        self.assertEqual((await gw.tools["stop_all_motors"]())["status"], "UNKNOWN_OUTCOME")
+        self.assertEqual((await gw.tools["stop_all_motors"](request_id=RID))["status"], "UNKNOWN_OUTCOME")
         self.assertEqual(len(calls), 1)
         _, gw, calls = make(lambda request, n: httpx.Response(400, json={}), **FULL)
-        self.assertEqual((await gw.tools["stop_all_motors"]())["status"], "error")
+        self.assertEqual((await gw.tools["stop_all_motors"](request_id=RID))["status"], "error")
         self.assertEqual(len(calls), 1)
 
     async def test_connect_error_is_definite_error_without_retry(self):
@@ -264,23 +281,52 @@ class MutationTests(unittest.IsolatedAsyncioTestCase):
             raise httpx.ConnectError("refused", request=request)
 
         _, gw, calls = make(handler, **FULL)
-        out = await gw.tools["job_stop"](job_id="j1")
+        out = await gw.tools["job_stop"](job_id="j1", request_id=RID)
         self.assertEqual((out["status"], out["error"], out["retry"]), ("error", "upstream_unreachable", False))
         self.assertEqual(len(calls), 1)
 
     async def test_oversized_content_rejected_before_upstream(self):
         _, gw, calls = make(lambda request, n: httpx.Response(200, json={"command_id": "cmd-7"}), **FULL)
-        out = await gw.tools["write_text"](project="p", relative_path="a.txt", content="x" * (256 * 1024 + 1))
+        out = await gw.tools["write_text"](project="p", relative_path="a.txt", content="x" * (256 * 1024 + 1), expected_sha256=HASH, request_id=RID)
         self.assertEqual(out["status"], "invalid_arguments")
         self.assertEqual(calls, [])
 
     async def test_second_device_and_conference_payload(self):
         _, gw, calls = make(lambda request, n: httpx.Response(200, json={"command_id": "cmd-7"}), **FULL)
-        await gw.tools["conference_run"](payload={"topic": "t"}, device="second")
+        await gw.tools["conference_run"](task="t", workspace="localbot", request_id=RID, device="second")
         sent = body(calls[0])
         self.assertEqual(sent, {"action": "enqueue", "command_type": "conference_run",
-                                "payload": {"topic": "t"}, "target_device": "SECOND-PC"})
+                                "payload": {"task": "t", "workspace": "localbot", "rounds": 2, "request_id": RID}, "target_device": "SECOND-PC"})
 
+
+    async def test_registered_script_and_security_fields(self):
+        _, gw, calls = make(lambda request, n: httpx.Response(202, json={"command_id": "cmd-7"}), **FULL)
+        out = await gw.tools["project_run"](script_id="localbot-tests", request_id=RID, arguments={})
+        self.assertEqual(out["status"], "queued")
+        self.assertEqual(body(calls[0])["payload"], {"script_id": "localbot-tests", "request_id": RID, "arguments": {}})
+        self.assertNotIn("runtime", body(calls[0])["payload"])
+        self.assertNotIn("script", body(calls[0])["payload"])
+        await gw.tools["patch_text"](project="localbot", relative_path="safe.txt", old="a", new="b", expected_sha256=HASH, request_id=RID)
+        self.assertEqual(body(calls[1])["payload"]["expected_sha256"], HASH)
+        self.assertEqual(body(calls[1])["payload"]["request_id"], RID)
+
+    async def test_mutation_rejects_invalid_preconditions_before_network(self):
+        _, gw, calls = make(lambda request, n: httpx.Response(202, json={"command_id": "cmd-7"}), **FULL)
+        for bad_id in ("bad-id", "", "../abc"):
+            out = await gw.tools["mkdir"](project="localbot", relative_path="test", request_id=bad_id)
+            self.assertEqual(out["status"], "invalid_arguments")
+        out = await gw.tools["write_text"](project="localbot", relative_path="a", content="x", expected_sha256="xyz", request_id=RID)
+        self.assertEqual(out["status"], "invalid_arguments")
+        out = await gw.tools["project_run"](script_id="localbot-tests", request_id=RID, arguments={"name": ["shell", "args"]})
+        self.assertEqual(out["status"], "invalid_arguments")
+        self.assertEqual(calls, [])
+
+    async def test_all_write_tools_require_request_id(self):
+        _, gw, calls = make(lambda request, n: httpx.Response(202, json={"command_id": "cmd-7"}), **FULL)
+        for name in MUTATION_TOOLS:
+            fn = gw.tools[name]
+            self.assertIn("request_id", fn.__annotations__ or {})
+        self.assertEqual(calls, [])
     async def test_mutate_refused_outside_full_mode(self):
         _, gw, calls = make(lambda request, n: httpx.Response(200, json={"command_id": "cmd-7"}))
         out = await gw.mutate("mkdir", "mkdir", "main", {"project": "p", "relative_path": "d"})
@@ -328,7 +374,7 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
         _, gw, _ = make(lambda request, n: httpx.Response(200, json=upstream), **FULL)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            await gw.tools["write_text"](project="PROJECT-MARKER", relative_path="PATH-MARKER.txt", content="CONTENT-MARKER")
+            await gw.tools["write_text"](project="PROJECT-MARKER", relative_path="PATH-MARKER.txt", content="CONTENT-MARKER", expected_sha256="absent", request_id=RID)
             await gw.tools["pc_status"](device="second")
         lines = buf.getvalue().splitlines()
         self.assertEqual(len(lines), 2)
