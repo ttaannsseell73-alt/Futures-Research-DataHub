@@ -177,9 +177,9 @@ VALIDATORS: dict[str, Callable[[str, Any], Any]] = {
     "command_id": _command_id,
     "script_id": _text(100, empty=False),
     "arguments": _json(64 * 1024, dict),
-    "request_id": _text(36, empty=False),
-    "expected_sha256": _text(64, empty=False),
-    "expected_head": _text(40, empty=False),
+    "request_id": lambda name, value: str(uuid.UUID(_text(36, empty=False)(name, value))) if isinstance(value, str) and len(value) == 36 and re.fullmatch(r"[0-9a-fA-F-]{36}", value) else (_ for _ in ()).throw(Invalid(f"{name} must be a UUID")),
+    "expected_sha256": lambda name, value: value if isinstance(value, str) and (value == "absent" or re.fullmatch(r"[0-9a-fA-F]{64}", value)) else (_ for _ in ()).throw(Invalid(f"{name} must be SHA256 or absent")),
+    "expected_head": lambda name, value: value if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value) else (_ for _ in ()).throw(Invalid(f"{name} must be a Git SHA")),
 }
 
 
