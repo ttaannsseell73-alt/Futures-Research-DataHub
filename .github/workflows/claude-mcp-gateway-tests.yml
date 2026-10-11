@@ -5,6 +5,11 @@ on:
     paths:
       - 'claude_mcp_gateway/**'
       - '.github/workflows/claude-mcp-gateway-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'claude_mcp_gateway/**'
+      - '.github/workflows/claude-mcp-gateway-tests.yml'
   workflow_dispatch:
 
 permissions:
