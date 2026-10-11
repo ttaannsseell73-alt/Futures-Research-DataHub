@@ -103,7 +103,7 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
     async def test_healthz_is_open_and_reveals_no_secrets(self):
         status, payload = await asgi(self.app(), "/healthz", method="GET")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(payload), {"ok": True, "version": "1.0.0", "mode": "readonly", "upstream_configured": True})
+        self.assertEqual(json.loads(payload), {"ok": True, "version": "1.1.0", "mode": "readonly", "upstream_configured": True})
         for secret in (TOKEN, ANON, SECRET):
             self.assertNotIn(secret.encode(), payload)
 
@@ -370,7 +370,7 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
 
 class AuditTests(unittest.IsolatedAsyncioTestCase):
     async def test_audit_line_has_no_secrets_or_bodies(self):
-        upstream = {"command_id": "cmd-7", "result": "RESULT-BODY-MARKER"}
+        upstream = {"completed": True, "command_id": "cmd-7", "result": "RESULT-BODY-MARKER"}
         _, gw, _ = make(lambda request, n: httpx.Response(200, json=upstream), **FULL)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
